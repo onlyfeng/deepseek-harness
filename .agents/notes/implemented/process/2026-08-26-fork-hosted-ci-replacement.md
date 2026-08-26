@@ -18,8 +18,8 @@ Editing `ci.yml` to retarget those private-runner jobs onto `ubuntu-latest` woul
 
 `fork checks passed` depends on every job this workflow can run on standard hosted runners:
 
-- `static` runs `pnpm run check:ci:static` with complete history and `DSH_ARCHIVE_BASE_REF` (the pull-request base SHA, or `github.event.before` on a `dev/compat` push), then `typecheck:contracts-ready` and `lint:contracts-ready`. The static aggregate owns runtime-closure, workspace constraints, package invariants, Cordis config, documentation, catalogs, module-graph, and `knip`; typecheck and lint stay in this job because the static aggregate does not own them.
-- `snapshots` runs `pnpm run check:ci:snapshot`, which is a full official `pnpm run build` followed by `DSH_EXAMPLE_MODE=lib` `test:snapshot` — the same `snapshotGate()` the upstream consumer lane uses, including assembled Web snapshots that source mode omits.
+- `static` runs `pnpm run check:ci:static` with complete history and `DSH_ARCHIVE_BASE_REF` (the pull-request base SHA, or `github.event.before` on a `dev/compat` push), then `build:lib:host`, then `typecheck:contracts-ready` and `lint:contracts-ready`. The static aggregate owns runtime-closure, workspace constraints, package invariants, Cordis config, documentation, catalogs, module-graph, and `knip`; typecheck and lint stay in this job because the static aggregate does not own them. Client tsc resolves generated Typert remotes under package `remote` subpaths, so the Host contract build must precede it — the same `typertContractsGate()` ordering the upstream consumer lane uses.
+- `snapshots` prepares bubblewrap with `scripts/prepare-ci-bubblewrap.sh`, then runs `pnpm run check:ci:snapshot` (full official `pnpm run build` followed by `DSH_EXAMPLE_MODE=lib` `test:snapshot`) — the same `snapshotGate()` the upstream consumer lane uses, including assembled Web snapshots that source mode omits. Lib-mode Web snapshots request `workspace-write` and refuse to run unconfined; ACP and headless sessions without a usable sandbox backend inject a `danger-full-access` runtime-context snapshot that fixtures recorded with a sandbox do not contain. Hosted Ubuntu images ship `pwsh`, so `pwshOnly` ACP scenarios run and their headers must match current tool descriptions.
 - `node-compat` reproduces the hosted Node 22.19 and Node 26 compatibility smokes.
 - `python-sdk` runs the keyless Python 3.10 SDK suite.
 - `python-runtime` calls the shared [single-executable builder](../../../../.github/workflows/build-exe-for-python-sdk.yml) for `node24-linux-x64` with `ci: true`, matching the [required Python runtime job](../testing/2026-08-12-required-python-runtime-pull-request-ci.md).
@@ -37,10 +37,14 @@ Each job is guarded with `github.repository == 'onlyfeng/deepseek-harness'` so a
 
 **Invoke `pnpm run test:snapshot` after a Host-only `build:lib:host`.** Unset `DSH_EXAMPLE_MODE` selects source mode, and `vitest.snapshot.config.ts` then omits assembled Web snapshots. Broken package exports, Client bundles, or Web output can pass.
 
+**Run `typecheck:contracts-ready` without `build:lib:host`.** Client tsc resolves generated Typert remotes such as `@deepseek-ai/dsh-commands/remote`. Those files exist only after the Host contract build; the static aggregate does not emit them.
+
+**Run `check:ci:snapshot` without preparing bubblewrap.** Lib-mode Web snapshots refuse `workspace-write` when no sandbox backend is usable. ACP and headless sessions then inject a `danger-full-access` runtime-context snapshot that fixtures recorded with bubblewrap do not contain.
+
 **Omit the hosted Node-compat, Python SDK, or Python runtime jobs.** Those jobs already run on `ubuntu-latest` in upstream CI. Disabling that workflow without reproducing them drops the minimum supported Node line and both Python distribution checks from the required verdict.
 
 **Run `check:ci:coverage` on hosted runners and isolate the flaky suites with Vitest CLI `--exclude`.** The repository uses Vitest `projects`, so CLI `--exclude` does not apply across projects. Excluding those suites requires editing the upstream Vitest config, which reintroduces a sync conflict.
 
 ## Consequences
 
-Pull requests and `dev/compat` pushes on this fork wait for `fork checks passed` instead of the upstream `all checks passed` aggregate. The replacement covers every hosted upstream job plus the static and snapshot aggregates that private runners previously owned. Exhaustive unit coverage, native Windows, and Playwright web snapshots remain local or upstream-private-runner evidence; a regression confined to those suites can still merge here.
+Pull requests and `dev/compat` pushes on this fork wait for `fork checks passed` instead of the upstream `all checks passed` aggregate. The replacement covers every hosted upstream job plus the static and snapshot aggregates that private runners previously owned. Exhaustive unit coverage, native Windows, and Playwright web snapshots remain local or upstream-private-runner evidence; a regression confined to those suites can still merge here. Hosted Ubuntu images include `pwsh`, so the `pwshOnly` ACP headers must stay aligned with the current job-tool and pwsh-tool descriptions.

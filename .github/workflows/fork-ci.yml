@@ -12,14 +12,18 @@ name: Fork CI
 # conflicts with it.
 #
 # Coverage relative to the disabled upstream CI:
-#   - check:ci:static (with archive base-ref) plus typecheck and lint: the
-#     upstream static aggregate, which also covers runtime-closure, workspace
-#     constraints, package invariants, Cordis config, documentation, catalogs,
-#     module-graph, and knip. Typecheck and lint stay here because the static
-#     aggregate does not own them (upstream puts them on the consumer lane).
-#   - check:ci:snapshot: full `pnpm run build` then DSH_EXAMPLE_MODE=lib
-#     test:snapshot, the same snapshotGate() the consumer lane uses, including
-#     assembled Web snapshots.
+#   - check:ci:static (with archive base-ref), then build:lib:host, then
+#     typecheck:contracts-ready and lint:contracts-ready. The static aggregate
+#     covers runtime-closure, workspace constraints, package invariants, Cordis
+#     config, documentation, catalogs, module-graph, and knip; it does not own
+#     typecheck or lint. Client tsc resolves generated Typert remotes, so the
+#     Host contract build must run first (upstream does that on the consumer
+#     lane via typertContractsGate()).
+#   - check:ci:snapshot: prepare-ci-bubblewrap.sh, then full `pnpm run build`
+#     then DSH_EXAMPLE_MODE=lib test:snapshot — the same snapshotGate() the
+#     consumer lane uses, including assembled Web snapshots. Lib-mode Web and
+#     sandbox-policy session events need a usable bubblewrap backend on hosted
+#     Ubuntu; GITHUB_PATH from the prepare script applies to later steps.
 #   - node-compat matrix (22.19 and 26): the hosted compatibility smokes.
 #   - python-sdk and python-runtime: the hosted Python SDK suite and the
 #     release-shaped Linux x64 runtime builder.
@@ -87,6 +91,14 @@ jobs:
           DSH_ARCHIVE_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: pnpm run check:ci:static
 
+      # Client tsc (`typecheck:contracts-ready`) resolves generated Typert
+      # remotes such as `@deepseek-ai/dsh-commands/remote`. Those files exist
+      # only after the Host contract build; the static aggregate does not emit
+      # them. Upstream's consumer lane runs the same `build:lib:host` step as
+      # typertContractsGate() before this typecheck.
+      - name: Build Host contracts
+        run: pnpm run build:lib:host
+
       - name: Typecheck
         run: pnpm run typecheck:contracts-ready
 
@@ -116,6 +128,14 @@ jobs:
 
       - name: Install (immutable)
         run: pnpm install --frozen-lockfile
+
+      # Lib-mode Web snapshots request workspace-write and refuse to run
+      # unconfined. ACP/headless sessions without a usable sandbox backend
+      # inject a danger-full-access runtime-context snapshot that fixtures
+      # recorded with bubblewrap do not contain. The script writes bwrap onto
+      # GITHUB_PATH for later steps; the functional probe is the authority.
+      - name: Prepare bubblewrap
+        run: bash scripts/prepare-ci-bubblewrap.sh
 
       - name: Run snapshot aggregate
         run: pnpm run check:ci:snapshot

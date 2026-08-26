@@ -267,7 +267,12 @@ describe('Fork CI workflow', () => {
     expect(staticCommands.some(step => (
       isRecord(step.env) && step.run === 'pnpm run check:ci:static' && typeof step.env.DSH_ARCHIVE_BASE_REF === 'string'
     ))).toBe(true)
-    expect(staticCommands.map(step => step.run)).toEqual(expect.arrayContaining([
+    const staticRuns = staticCommands.map(step => step.run)
+    const hostBuild = staticRuns.indexOf('pnpm run build:lib:host')
+    const typecheck = staticRuns.indexOf('pnpm run typecheck:contracts-ready')
+    expect(hostBuild).toBeGreaterThanOrEqual(0)
+    expect(hostBuild).toBeLessThan(typecheck)
+    expect(staticRuns).toEqual(expect.arrayContaining([
       'pnpm run typecheck:contracts-ready',
       'pnpm run lint:contracts-ready',
     ]))
@@ -276,7 +281,11 @@ describe('Fork CI workflow', () => {
       isRecord(step) && typeof step.run === 'string'
     ))
     expect(snapshots['runs-on']).toBe('ubuntu-latest')
-    expect(snapshotCommands.map(step => step.run)).toContain('pnpm run check:ci:snapshot')
+    const snapshotRuns = snapshotCommands.map(step => step.run)
+    const bubblewrap = snapshotRuns.findIndex(run => run.includes('prepare-ci-bubblewrap.sh'))
+    const snapshotGate = snapshotRuns.indexOf('pnpm run check:ci:snapshot')
+    expect(bubblewrap).toBeGreaterThanOrEqual(0)
+    expect(bubblewrap).toBeLessThan(snapshotGate)
     expect(JSON.stringify(snapshots.steps)).not.toContain('pnpm run test:snapshot')
 
     expect(nodeCompat['runs-on']).toBe('${{ matrix.runner }}')
