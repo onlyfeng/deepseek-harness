@@ -1,0 +1,88 @@
+name: Upstream Sync
+
+# Keeps the `master` mirror fast-forwarded to upstream
+# (deepseek-ai/deepseek-harness) and opens an integration PR into the fork's
+# working branch `dev/compat` when upstream introduces new commits. A human
+# reviews and resolves conflicts before merging into dev/compat.
+#
+# Scheduled runs only fire from the repository's default branch, so this file
+# must live on the default branch (set it to dev/compat) for the cron to
+# trigger; workflow_dispatch works from any branch that has this file.
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch: {}
+
+# Only the source fork runs this; forks-of-the-fork must not mirror.
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: https://github.com/deepseek-ai/deepseek-harness.git
+  UPSTREAM_BRANCH: master
+  MIRROR_BRANCH: master
+  INTEGRATION_BRANCH: dev/compat
+
+jobs:
+  sync:
+    if: github.repository == 'onlyfeng/deepseek-harness'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configure git identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Fetch upstream and mirror refs
+        run: |
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+          git fetch --no-tags origin "$MIRROR_BRANCH" "$INTEGRATION_BRANCH"
+
+      - name: Fast-forward the mirror branch
+        run: |
+          # `master` is a pure upstream mirror: only ever fast-forward it.
+          # A non-ancestor origin/master means someone committed to the mirror;
+          # fail loudly instead of force-pushing over it.
+          if git merge-base --is-ancestor "origin/$MIRROR_BRANCH" "upstream/$UPSTREAM_BRANCH"; then
+            if [ "$(git rev-parse "origin/$MIRROR_BRANCH")" = "$(git rev-parse "upstream/$UPSTREAM_BRANCH")" ]; then
+              echo "Mirror already up to date."
+            else
+              git push origin "upstream/$UPSTREAM_BRANCH:refs/heads/$MIRROR_BRANCH"
+              echo "Mirror fast-forwarded to upstream/$UPSTREAM_BRANCH."
+            fi
+          else
+            echo "::error::origin/$MIRROR_BRANCH has commits absent from upstream/$UPSTREAM_BRANCH; refusing to force. Investigate divergence."
+            exit 1
+          fi
+
+      - name: Open or refresh integration PR (master -> dev/compat)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          behind="$(git rev-list --count "origin/$INTEGRATION_BRANCH..upstream/$UPSTREAM_BRANCH")"
+          if [ "$behind" -eq 0 ]; then
+            echo "$INTEGRATION_BRANCH already contains upstream; no integration PR needed."
+            exit 0
+          fi
+          existing="$(gh pr list --base "$INTEGRATION_BRANCH" --head "$MIRROR_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            echo "Integration PR #$existing is open and tracks $MIRROR_BRANCH automatically ($behind commit(s) ahead)."
+          else
+            gh pr create \
+              --base "$INTEGRATION_BRANCH" \
+              --head "$MIRROR_BRANCH" \
+              --title "chore: 集成上游更新 (${MIRROR_BRANCH} → ${INTEGRATION_BRANCH})" \
+              --body "自动创建:上游 \`${UPSTREAM_BRANCH}\` 有 ${behind} 个 \`${INTEGRATION_BRANCH}\` 尚未包含的提交。请审核并解决可能的冲突后合并。"
+          fi
