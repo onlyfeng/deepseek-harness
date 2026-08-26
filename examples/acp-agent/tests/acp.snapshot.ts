@@ -309,6 +309,10 @@ const SCENARIOS: Scenario[] = [
     headerClass: 'persistent-pwsh',
     configPath: PERSISTENT_PWSH_CONFIG,
     pwshOnly: true,
+    // GitHub-hosted images ship pwsh, but the persistent PTY returns
+    // shell-init scrollback instead of the command output. One-shot
+    // pwsh-tool-turn still runs. Fixtures stay guarded.
+    skipRun: process.env.RUNNER_ENVIRONMENT === 'github-hosted',
   },
   // Authored keyless replay through a test-only partial-Landlock provider:
   // the exact compatibility notice must stay ordinary stderr when the wrapped

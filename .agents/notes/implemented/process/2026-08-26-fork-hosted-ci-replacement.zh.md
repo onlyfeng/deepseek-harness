@@ -19,7 +19,7 @@ Status: implemented
 `fork checks passed` 依赖本工作流能在标准托管 runner 上运行的每一项作业：
 
 - `static` 在完整历史与 `DSH_ARCHIVE_BASE_REF`（拉取请求的 base SHA，或 `dev/compat` 推送上的 `github.event.before`）下运行 `pnpm run check:ci:static`，然后运行 `build:lib:host`，再运行 `typecheck:contracts-ready` 与 `lint:contracts-ready`。静态聚合拥有 runtime-closure、workspace 约束、package invariant、Cordis 配置、文档、catalog、module-graph 和 `knip`；typecheck 与 lint 留在本作业中，因为静态聚合并不拥有它们。Client tsc 会解析包 `remote` 子路径下生成的 Typert remote，因此 Host 契约构建必须先于它——与上游 consumer 通道的 `typertContractsGate()` 顺序相同。
-- `snapshots` 先用 `scripts/prepare-ci-bubblewrap.sh` 准备 bubblewrap，再运行 `pnpm run check:ci:snapshot`（一次完整的官方 `pnpm run build`，随后以 `DSH_EXAMPLE_MODE=lib` 运行 `test:snapshot`）——与上游 consumer 通道使用的同一个 `snapshotGate()`，包括源码 mode 会省略的组装后 Web 快照。Lib-mode Web 快照会请求 `workspace-write` 并拒绝在无隔离环境下运行；ACP 与 headless 会话在没有可用 sandbox 后端时会注入 `danger-full-access` 运行时上下文快照，而这与带 sandbox 录制的 fixture 不一致。托管 Ubuntu 镜像自带 `pwsh`，因此 `pwshOnly` ACP 场景会实际运行，其 header 必须与当前工具描述一致。
+- `snapshots` 先用 `scripts/prepare-ci-bubblewrap.sh` 准备 bubblewrap，再运行 `pnpm run check:ci:snapshot`（一次完整的官方 `pnpm run build`，随后以 `DSH_EXAMPLE_MODE=lib` 运行 `test:snapshot`）——与上游 consumer 通道使用的同一个 `snapshotGate()`，包括源码 mode 会省略的组装后 Web 快照。Lib-mode Web 快照会请求 `workspace-write` 并拒绝在无隔离环境下运行；ACP 与 headless 会话在没有可用 sandbox 后端时会注入 `danger-full-access` 运行时上下文快照，而这与带 sandbox 录制的 fixture 不一致。托管 Ubuntu 镜像自带 `pwsh`，因此 `pwshOnly` ACP 场景会实际运行，其 header 必须与当前工具描述一致。该作业设置 `DSH_SNAPSHOT_MAX_CONCURRENCY=1`，以免并行快照文件饿死 DeepSeek SSE keep-alive 注释测试。`persistent-pwsh-tool-turn` 在 `RUNNER_ENVIRONMENT` 为 `github-hosted` 时设置 `skipRun`：持久 PTY 返回的是 shell 初始化回滚缓冲而不是命令输出，已提交 fixture 不会被改写成该结果。
 - `node-compat` 复现托管的 Node 22.19 与 Node 26 兼容性冒烟测试。
 - `python-sdk` 运行无密钥的 Python 3.10 SDK 套件。
 - `python-runtime` 以 `ci: true` 调用共享的[单文件可执行文件构建器](../../../../.github/workflows/build-exe-for-python-sdk.yml) 构建 `node24-linux-x64`，与[必需的 Python runtime 作业](../testing/2026-08-12-required-python-runtime-pull-request-ci.zh.md)一致。
@@ -47,4 +47,4 @@ Status: implemented
 
 ## 后果
 
-本 fork 上的拉取请求与 `dev/compat` 推送等待 `fork checks passed`，而不是上游的 `all checks passed` 聚合。该替代方案覆盖每一项托管的上游作业，以及原先由私有 runner 拥有的静态与快照聚合。穷尽单元覆盖率、原生 Windows 以及 Playwright Web 快照仍是本地或上游私有 runner 上的证据；仅限于那些套件的回归在此仍可能合并。托管 Ubuntu 镜像包含 `pwsh`，因此 `pwshOnly` ACP header 必须与当前的 job 工具和 pwsh 工具描述保持一致。
+本 fork 上的拉取请求与 `dev/compat` 推送等待 `fork checks passed`，而不是上游的 `all checks passed` 聚合。该替代方案覆盖每一项托管的上游作业，以及原先由私有 runner 拥有的静态与快照聚合。穷尽单元覆盖率、原生 Windows、Playwright Web 快照以及持久 pwsh PTY ACP 场景仍是本地或上游私有 runner 上的证据；仅限于那些套件的回归在此仍可能合并。托管 Ubuntu 镜像包含 `pwsh`，因此一次性 `pwshOnly` ACP header 必须与当前的 job 工具和 pwsh 工具描述保持一致。

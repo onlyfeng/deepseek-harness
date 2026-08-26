@@ -281,6 +281,7 @@ describe('Fork CI workflow', () => {
       isRecord(step) && typeof step.run === 'string'
     ))
     expect(snapshots['runs-on']).toBe('ubuntu-latest')
+    expect(snapshots.env).toMatchObject({ DSH_SNAPSHOT_MAX_CONCURRENCY: '1' })
     const snapshotRuns = snapshotCommands.map(step => step.run)
     const bubblewrap = snapshotRuns.findIndex(run => run.includes('prepare-ci-bubblewrap.sh'))
     const snapshotGate = snapshotRuns.indexOf('pnpm run check:ci:snapshot')

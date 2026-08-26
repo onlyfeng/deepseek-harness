@@ -24,6 +24,9 @@ name: Fork CI
 #     consumer lane uses, including assembled Web snapshots. Lib-mode Web and
 #     sandbox-policy session events need a usable bubblewrap backend on hosted
 #     Ubuntu; GITHUB_PATH from the prepare script applies to later steps.
+#     DSH_SNAPSHOT_MAX_CONCURRENCY=1 so the SSE keep-alive comment test is not
+#     starved. persistent-pwsh-tool-turn skips its run on github-hosted
+#     (RUNNER_ENVIRONMENT); the persistent PTY returns shell-init scrollback.
 #   - node-compat matrix (22.19 and 26): the hosted compatibility smokes.
 #   - python-sdk and python-runtime: the hosted Python SDK suite and the
 #     release-shaped Linux x64 runtime builder.
@@ -112,6 +115,9 @@ jobs:
     timeout-minutes: 45
     env:
       DSH_GATE_CONCURRENCY: '4'
+      # Hosted ubuntu-latest has 4 CPUs; parallel snapshot files starve the
+      # DeepSeek SSE keep-alive comment test (streamIdleTimeoutMs 150).
+      DSH_SNAPSHOT_MAX_CONCURRENCY: '1'
     steps:
       - uses: actions/checkout@v6
         with:

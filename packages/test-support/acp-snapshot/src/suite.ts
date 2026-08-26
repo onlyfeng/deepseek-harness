@@ -185,13 +185,20 @@ export interface Scenario {
    * on every platform.
    */
   pwshOnly?: boolean
+  /**
+   * When true, skip the run test while fixture guards still cover the
+   * committed files. Use when the host has the scenario's binary but cannot
+   * exercise the composition.
+   */
+  skipRun?: boolean
 }
 
 /**
  * Whether a scenario's run test is skipped for this mode and host: record mode
  * skips authored (non-`recorded`) scenarios, {@link Scenario.posixOnly}
- * scenarios skip on Windows, and {@link Scenario.pwshOnly} scenarios skip
- * when the caller's `hasPwsh` probe is false.
+ * scenarios skip on Windows, {@link Scenario.pwshOnly} scenarios skip when
+ * the caller's `hasPwsh` probe is false, and {@link Scenario.skipRun}
+ * scenarios skip unconditionally.
  *
  * @param scenario The scenario whose run test is being registered.
  * @param recording Whether the suite runs in record mode.
@@ -207,6 +214,7 @@ export function scenarioSkipped(
   hasPwsh?: boolean,
 ): boolean {
   if (recording && !scenario.recorded) return true
+  if (scenario.skipRun === true) return true
   if (scenario.posixOnly === true && platform === 'win32') return true
   return scenario.pwshOnly === true && hasPwsh !== true
 }
