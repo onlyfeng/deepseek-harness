@@ -235,6 +235,115 @@ describe('CI workflow', () => {
   })
 })
 
+describe('Fork CI workflow', () => {
+  it('reproduces hosted upstream jobs and the static/snapshot aggregates without private runners', () => {
+    const workflow = loadWorkflow('.github/workflows/fork-ci.yml')
+    const staticJob = workflowJob(workflow, 'static')
+    const snapshots = workflowJob(workflow, 'snapshots')
+    const nodeCompat = workflowJob(workflow, 'node-compat')
+    const pythonSdk = workflowJob(workflow, 'python-sdk')
+    const pythonRuntime = workflowJob(workflow, 'python-runtime')
+    const windows = workflowJob(workflow, 'windows')
+    const aggregate = workflowJob(workflow, 'fork-checks-passed')
+    if (!isRecord(workflow.jobs) || !Array.isArray(aggregate.needs) || !Array.isArray(staticJob.steps)
+      || !Array.isArray(snapshots.steps) || !Array.isArray(windows.steps) || !isRecord(nodeCompat.strategy)) {
+      throw new TypeError('Fork CI must define static, snapshots, node-compat, windows steps and an aggregate needs list')
+    }
+
+    expect(workflow.name).toBe('Fork CI')
+    expect(Object.keys(workflow.on as object).sort()).toEqual(['pull_request', 'push'])
+    expect(workflow.jobs).not.toHaveProperty('node-24-coverage')
+    expect(workflow.jobs).not.toHaveProperty('windows-native')
+
+    const staticCheckout = staticJob.steps.find((step): step is Record<string, unknown> => (
+      isRecord(step) && typeof step.uses === 'string' && step.uses.startsWith('actions/checkout@')
+    ))
+    const staticCommands = staticJob.steps.filter((step): step is Record<string, unknown> & { run: string } => (
+      isRecord(step) && typeof step.run === 'string'
+    ))
+    expect(staticJob['runs-on']).toBe('ubuntu-latest')
+    expect(staticCheckout).toMatchObject({ with: { 'fetch-depth': 0 } })
+    expect(staticCommands.some(step => step.run === 'pnpm run check:ci:static')).toBe(true)
+    expect(staticCommands.some(step => (
+      isRecord(step.env) && step.run === 'pnpm run check:ci:static' && typeof step.env.DSH_ARCHIVE_BASE_REF === 'string'
+    ))).toBe(true)
+    expect(staticCommands.map(step => step.run)).toEqual(expect.arrayContaining([
+      'pnpm run typecheck:contracts-ready',
+      'pnpm run lint:contracts-ready',
+    ]))
+
+    const snapshotCommands = snapshots.steps.filter((step): step is Record<string, unknown> & { run: string } => (
+      isRecord(step) && typeof step.run === 'string'
+    ))
+    expect(snapshots['runs-on']).toBe('ubuntu-latest')
+    expect(snapshotCommands.map(step => step.run)).toContain('pnpm run check:ci:snapshot')
+    expect(JSON.stringify(snapshots.steps)).not.toContain('pnpm run test:snapshot')
+
+    expect(nodeCompat['runs-on']).toBe('${{ matrix.runner }}')
+    expect(nodeCompat.strategy).toMatchObject({
+      'fail-fast': false,
+      matrix: {
+        include: [
+          { node: '22.19', name: 'node 22.19', runner: 'ubuntu-latest', gate_concurrency: '1' },
+          { node: 26, name: 'node 26', runner: 'ubuntu-latest', gate_concurrency: '1' },
+        ],
+      },
+    })
+
+    expect(pythonSdk).toMatchObject({
+      'runs-on': 'ubuntu-latest',
+      name: 'python 3.10 / keyless SDK',
+    })
+    expect(JSON.stringify(pythonSdk.steps)).toContain('uv run --python 3.10 --group test --project python/sdk pytest')
+
+    expect(pythonRuntime).toMatchObject({
+      name: 'python runtime / release-shaped Linux x64',
+      uses: './.github/workflows/build-exe-for-python-sdk.yml',
+      with: {
+        targets: 'node24-linux-x64',
+        ci: true,
+      },
+    })
+
+    const windowsCommands = windows.steps.filter((step): step is Record<string, unknown> & { run: string } => (
+      isRecord(step) && typeof step.run === 'string'
+    ))
+    expect(windows['runs-on']).toBe('ubuntu-latest')
+    expect(windows.name).toBe('windows node 24 / wine blocking')
+    expect(windowsCommands.some(step => step.run.includes('wine-windows-gates.sh'))).toBe(true)
+
+    expect(aggregate.needs).toEqual([
+      'static',
+      'snapshots',
+      'node-compat',
+      'python-sdk',
+      'python-runtime',
+      'windows',
+    ])
+    expect(aggregate.if).toContain('always()')
+  })
+
+  it('isolates every pnpm action setup destination on the fork gate', () => {
+    const workflow = loadWorkflow('.github/workflows/fork-ci.yml')
+    if (!isRecord(workflow.jobs)) throw new TypeError('Fork CI must define jobs')
+    const setups: Array<{ jobName: string; step: unknown }> = []
+    for (const [jobName, job] of Object.entries(workflow.jobs)) {
+      if (!isRecord(job) || !Array.isArray(job.steps)) continue
+      for (const step of job.steps) {
+        if (!isRecord(step) || typeof step.uses !== 'string' || !step.uses.startsWith('pnpm/action-setup@')) continue
+        setups.push({ jobName, step })
+      }
+    }
+
+    expect(setups.length).toBeGreaterThan(0)
+    for (const { jobName, step } of setups) {
+      expect(step, `${jobName} must not share pnpm/action-setup's default destination`).toMatchObject({
+        with: { dest: runnerPrivatePnpmDestination },
+      })
+    }
+  })
+})
+
 describe('DeepSeek e2e workflow', () => {
   it('prepares bubblewrap from the pinned payload without a package transaction', () => {
     const workflow = loadWorkflow('.github/workflows/e2e.yml')

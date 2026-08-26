@@ -1,0 +1,46 @@
+# Agent Note: Fork-hosted CI replacement
+
+Status: implemented
+
+English | [中文](2026-08-26-fork-hosted-ci-replacement.zh.md)
+
+## Problem
+
+[CI](../../../../.github/workflows/ci.yml) binds its static, coverage, consumer, and native-Windows jobs to private runner labels (`dsh-ubuntu-24-04-16core`, `dsh-windows-2025-16core`). This fork cannot allocate those pools, so those jobs queue indefinitely and `all checks passed` never settles. Branch protection that requires that aggregate therefore never completes.
+
+Disabling the upstream `CI` workflow in the Actions tab removes the deadlock. The remaining hosted jobs in that same file — Node 22.19 / 26 compatibility, the Python SDK suite, the release-shaped Linux x64 Python runtime builder, and the Wine Windows lane — then stop running as well, because they live in the disabled workflow rather than in a portable file.
+
+Editing `ci.yml` to retarget those private-runner jobs onto `ubuntu-latest` would restore a signal, but every upstream sync of that frequently changing file would conflict.
+
+## Decision
+
+[`.github/workflows/fork-ci.yml`](../../../../.github/workflows/fork-ci.yml) is the required pull-request and `dev/compat` push gate on `onlyfeng/deepseek-harness`. The file does not exist upstream, so merging `master` does not conflict with it. Operators disable the upstream `CI` workflow on this fork; the workflow file itself stays unmodified.
+
+`fork checks passed` depends on every job this workflow can run on standard hosted runners:
+
+- `static` runs `pnpm run check:ci:static` with complete history and `DSH_ARCHIVE_BASE_REF` (the pull-request base SHA, or `github.event.before` on a `dev/compat` push), then `typecheck:contracts-ready` and `lint:contracts-ready`. The static aggregate owns runtime-closure, workspace constraints, package invariants, Cordis config, documentation, catalogs, module-graph, and `knip`; typecheck and lint stay in this job because the static aggregate does not own them.
+- `snapshots` runs `pnpm run check:ci:snapshot`, which is a full official `pnpm run build` followed by `DSH_EXAMPLE_MODE=lib` `test:snapshot` — the same `snapshotGate()` the upstream consumer lane uses, including assembled Web snapshots that source mode omits.
+- `node-compat` reproduces the hosted Node 22.19 and Node 26 compatibility smokes.
+- `python-sdk` runs the keyless Python 3.10 SDK suite.
+- `python-runtime` calls the shared [single-executable builder](../../../../.github/workflows/build-exe-for-python-sdk.yml) for `node24-linux-x64` with `ci: true`, matching the [required Python runtime job](../testing/2026-08-12-required-python-runtime-pull-request-ci.md).
+- `windows` runs `scripts/wine-windows-gates.sh` on `ubuntu-latest`, matching the blocking Wine lane in [the portable pull-request CI record](2026-07-23-portable-required-pull-request-ci.md).
+
+The workflow does not run `check:ci:coverage` or `pnpm run test`. Those suites include `packages/terminal` and `packages/shell` integration tests that require a tuned PTY / PowerShell runner and fail on GitHub-hosted images, and the repository Vitest `projects` configuration cannot exclude them from the CLI without editing the upstream Vitest config. `windows-native` stays omitted because it still requires the private Windows runner.
+
+Each job is guarded with `github.repository == 'onlyfeng/deepseek-harness'` so a fork of this fork does not inherit the gate under the wrong repository. The aggregate uses `if: always()` so a failed or skipped dependency fails the required check instead of counting as a skip-pass.
+
+## Alternatives considered
+
+**Retarget `ci.yml` private-runner jobs onto `ubuntu-latest`.** This restores the upstream workflow as the gate, but `ci.yml` changes frequently upstream and every sync would conflict on the `runs-on` expressions.
+
+**Keep only build, typecheck, and lint in the replacement.** That leaves Cordis-config, package-invariant, documentation, catalog, and module-graph failures able to merge, and it treats typecheck plus lint as equivalent to `check:ci:static`, which they are not.
+
+**Invoke `pnpm run test:snapshot` after a Host-only `build:lib:host`.** Unset `DSH_EXAMPLE_MODE` selects source mode, and `vitest.snapshot.config.ts` then omits assembled Web snapshots. Broken package exports, Client bundles, or Web output can pass.
+
+**Omit the hosted Node-compat, Python SDK, or Python runtime jobs.** Those jobs already run on `ubuntu-latest` in upstream CI. Disabling that workflow without reproducing them drops the minimum supported Node line and both Python distribution checks from the required verdict.
+
+**Run `check:ci:coverage` on hosted runners and isolate the flaky suites with Vitest CLI `--exclude`.** The repository uses Vitest `projects`, so CLI `--exclude` does not apply across projects. Excluding those suites requires editing the upstream Vitest config, which reintroduces a sync conflict.
+
+## Consequences
+
+Pull requests and `dev/compat` pushes on this fork wait for `fork checks passed` instead of the upstream `all checks passed` aggregate. The replacement covers every hosted upstream job plus the static and snapshot aggregates that private runners previously owned. Exhaustive unit coverage, native Windows, and Playwright web snapshots remain local or upstream-private-runner evidence; a regression confined to those suites can still merge here.

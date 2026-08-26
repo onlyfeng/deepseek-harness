@@ -359,6 +359,19 @@ describe('Node 24 lane ownership', () => {
     expect(subject.map(item => item.id)).not.toContain('doc-typecheck')
   })
 
+  it('replays snapshots against a full official build in lib mode', () => {
+    const subject = withPnpmEntrypoint(() => gatesForMode('ci-snapshot'))
+
+    expect(subject.map(item => item.id)).toEqual(['build', 'snapshot'])
+    expect(subject.find(item => item.id === 'build')?.env).toEqual({
+      DSH_BUILD_CLIENT_PROFILE: 'official',
+    })
+    expect(subject.find(item => item.id === 'snapshot')).toMatchObject({
+      env: { DSH_EXAMPLE_MODE: 'lib' },
+      needs: ['build'],
+    })
+  })
+
   it('owns the build and orders its artifact consumers', () => {
     const subject = withPnpmEntrypoint(() => gatesForMode('ci-consumers'))
 
