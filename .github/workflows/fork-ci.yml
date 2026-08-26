@@ -4,11 +4,25 @@ name: Fork CI
 #
 # The upstream `CI` workflow (ci.yml) binds its coverage, static, consumer, and
 # windows-native jobs to private runner labels (dsh-ubuntu-24-04-16core,
-# dsh-windows-2025-16core) this fork does not have, so those jobs queue
-# forever and its `all checks passed` aggregate never settles. Disable the
-# upstream `CI` workflow on this fork (Actions tab -> CI -> Disable workflow)
-# and let this workflow gate the fork's changes instead. This file does not
-# exist upstream, so syncing upstream never conflicts with it.
+# dsh-windows-2025-16core) this fork does not have, so those jobs queue forever
+# and its `all checks passed` aggregate never settles. The upstream `CI`
+# workflow is therefore disabled on this fork (Actions tab -> CI -> Disable
+# workflow) and this workflow gates the fork's changes on hosted runners
+# instead. This file does not exist upstream, so syncing upstream never
+# conflicts with it.
+#
+# Coverage relative to the disabled upstream CI:
+#   - build + typecheck + lint: replaces the upstream static gate.
+#   - keyless snapshot replay (test:snapshot): the assembled-application
+#     behavior coverage, deterministic on Linux/macOS.
+#   - wine Windows gate: the same hosted `windows` lane ci.yml runs on
+#     ubuntu-latest (workspace build + production site under win-x64 Node).
+# The full `pnpm run test` unit suite is NOT gated here: its shell/terminal/pwsh
+# integration suites (packages/terminal, packages/shell) depend on a tuned
+# PTY/PowerShell runner and flake on GitHub-hosted runners, and the repo's
+# vitest `projects` config cannot exclude them from the CLI without editing the
+# upstream config (which would conflict on every upstream sync). Run
+# `pnpm run test` locally; the upstream coverage runner owns the exhaustive gate.
 
 on:
   pull_request:
@@ -25,7 +39,7 @@ concurrency:
 
 jobs:
   checks:
-    name: build, typecheck, lint
+    name: build, typecheck, lint, snapshot
     # Guard so a fork-of-this-fork does not inherit the gate under a wrong repo.
     if: github.repository == 'onlyfeng/deepseek-harness'
     runs-on: ubuntu-latest
@@ -57,15 +71,45 @@ jobs:
       - name: Lint
         run: pnpm run lint:contracts-ready
 
-      # The full `pnpm run test` suite is intentionally not gated here: upstream's
-      # shell/terminal/pwsh integration suites (packages/terminal, packages/shell)
-      # depend on a tuned PTY/PowerShell runner and flake on GitHub-hosted
-      # runners, so they would block merges for reasons unrelated to fork changes.
-      # Run `pnpm run test` locally; upstream CI owns the exhaustive suite.
+      - name: Snapshot replay (keyless)
+        run: pnpm run test:snapshot
+
+  windows-wine:
+    name: windows (wine blocking)
+    if: github.repository == 'onlyfeng/deepseek-harness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      # Runner provisioning only: the gate script assumes a wine binary and
+      # fails loud without one. The `wine` dispatcher package puts the binary
+      # on PATH. The script does its own scratch snapshot + install, so no
+      # root `pnpm install` is needed here.
+      - name: Install Wine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine
+
+      - name: Run the Wine Windows gates
+        run: bash scripts/wine-windows-gates.sh
+
+      - name: Shut down wineserver
+        if: always()
+        run: wineserver -k 2>/dev/null || true
 
   fork-checks-passed:
     name: fork checks passed
-    needs: [checks]
+    needs: [checks, windows-wine]
     # always() so a failed dependency fails this gate instead of skipping it
     # (a skipped required check counts as passing on GitHub).
     if: always() && github.repository == 'onlyfeng/deepseek-harness'
