@@ -9,19 +9,8 @@ const nativeWindowsPnpmDestination = '${{ runner.temp }}/setup-pnpm-js'
 
 describe('CI workflow', () => {
   it('isolates every pnpm action setup destination per runner', () => {
-    const files = ['.github/workflows/ci.yml', '.github/workflows/ci-master.yml']
-    const setups: Array<{ jobName: string; step: unknown }> = []
-    for (const file of files) {
-      const workflow: unknown = yaml.load(readFileSync(resolve(root, file), 'utf8'))
-      if (!isRecord(workflow) || !isRecord(workflow.jobs)) throw new TypeError(`${file} must define jobs`)
-      for (const [jobName, job] of Object.entries(workflow.jobs)) {
-        if (!isRecord(job) || !Array.isArray(job.steps)) continue
-        for (const step of job.steps) {
-          if (!isRecord(step) || typeof step.uses !== 'string' || !step.uses.startsWith('pnpm/action-setup@')) continue
-          setups.push({ jobName, step })
-        }
-      }
-    }
+    const setups = ['.github/workflows/ci.yml', '.github/workflows/ci-master.yml']
+      .flatMap(file => pnpmActionSetups(loadWorkflow(file)))
 
     expect(setups.length).toBeGreaterThan(0)
     for (const { jobName, step } of setups) {
@@ -63,9 +52,7 @@ describe('CI workflow', () => {
     if (!Array.isArray(windows.steps) || !Array.isArray(aggregate.needs)) {
       throw new TypeError('Windows job must define steps and the aggregate must define needs')
     }
-    const commandSteps = windows.steps.filter((step): step is Record<string, unknown> & { run: string } => (
-      isRecord(step) && typeof step.run === 'string'
-    ))
+    const commandSteps = runSteps(windows)
 
     // Required PR job: Wine on ubuntu-latest, runs wine-windows-gates.sh.
     expect(windows['runs-on']).toBe('ubuntu-latest')
@@ -86,10 +73,7 @@ describe('CI workflow', () => {
     expect(windowsNative.env).toMatchObject({
       DSH_COVERAGE_TEST_TIMEOUT_MS: '30000',
     })
-    const nativeSteps = windowsNative.steps as unknown[]
-    const nativeCommandSteps = nativeSteps.filter((step): step is Record<string, unknown> & { run: string } => (
-      isRecord(step) && typeof step.run === 'string'
-    ))
+    const nativeCommandSteps = runSteps(windowsNative)
     expect(nativeCommandSteps.map(step => step.run)).toContain('pnpm run check:ci:windows-complete')
 
     // wine-apt-cache: master-only, seeds the Wine apt cache, lives in ci-master.
@@ -260,9 +244,7 @@ describe('Fork CI workflow', () => {
     const staticCheckout = staticJob.steps.find((step): step is Record<string, unknown> => (
       isRecord(step) && typeof step.uses === 'string' && step.uses.startsWith('actions/checkout@')
     ))
-    const staticCommands = staticJob.steps.filter((step): step is Record<string, unknown> & { run: string } => (
-      isRecord(step) && typeof step.run === 'string'
-    ))
+    const staticCommands = runSteps(staticJob)
     expect(staticJob['runs-on']).toBe('ubuntu-latest')
     expect(staticCheckout).toMatchObject({ with: { 'fetch-depth': 0 } })
     expect(staticCommands.some(step => step.run === 'pnpm run check:ci:static')).toBe(true)
@@ -279,9 +261,7 @@ describe('Fork CI workflow', () => {
       'pnpm run lint:contracts-ready',
     ]))
 
-    const snapshotCommands = snapshots.steps.filter((step): step is Record<string, unknown> & { run: string } => (
-      isRecord(step) && typeof step.run === 'string'
-    ))
+    const snapshotCommands = runSteps(snapshots)
     expect(snapshots['runs-on']).toBe('ubuntu-latest')
     expect(snapshots.env).toMatchObject({ DSH_SNAPSHOT_MAX_CONCURRENCY: '1' })
     const snapshotRuns = snapshotCommands.map(step => step.run)
@@ -291,9 +271,7 @@ describe('Fork CI workflow', () => {
     expect(bubblewrap).toBeLessThan(snapshotGate)
     expect(JSON.stringify(snapshots.steps)).not.toContain('pnpm run test:snapshot')
 
-    const artifactCommands = artifacts.steps.filter((step): step is Record<string, unknown> & { run: string } => (
-      isRecord(step) && typeof step.run === 'string'
-    ))
+    const artifactCommands = runSteps(artifacts)
     expect(artifacts['runs-on']).toBe('ubuntu-latest')
     const artifactRuns = artifactCommands.map(step => step.run)
     const artifactAggregate = artifactRuns.indexOf('pnpm run check:ci:artifacts')
@@ -336,9 +314,7 @@ describe('Fork CI workflow', () => {
       },
     })
 
-    const windowsCommands = windows.steps.filter((step): step is Record<string, unknown> & { run: string } => (
-      isRecord(step) && typeof step.run === 'string'
-    ))
+    const windowsCommands = runSteps(windows)
     expect(windows['runs-on']).toBe('ubuntu-latest')
     expect(windows.name).toBe('windows node 24 / wine blocking')
     expect(windowsCommands.some(step => step.run.includes('wine-windows-gates.sh'))).toBe(true)
@@ -356,16 +332,7 @@ describe('Fork CI workflow', () => {
   })
 
   it('isolates every pnpm action setup destination on the fork gate', () => {
-    const workflow = loadWorkflow('.github/workflows/fork-ci.yml')
-    if (!isRecord(workflow.jobs)) throw new TypeError('Fork CI must define jobs')
-    const setups: Array<{ jobName: string; step: unknown }> = []
-    for (const [jobName, job] of Object.entries(workflow.jobs)) {
-      if (!isRecord(job) || !Array.isArray(job.steps)) continue
-      for (const step of job.steps) {
-        if (!isRecord(step) || typeof step.uses !== 'string' || !step.uses.startsWith('pnpm/action-setup@')) continue
-        setups.push({ jobName, step })
-      }
-    }
+    const setups = pnpmActionSetups(loadWorkflow('.github/workflows/fork-ci.yml'))
 
     expect(setups.length).toBeGreaterThan(0)
     for (const { jobName, step } of setups) {
@@ -698,6 +665,26 @@ function workflowJob(workflow: Record<string, unknown>, job: string): Record<str
     throw new TypeError(`workflow must define the ${job} job`)
   }
   return workflow.jobs[job]
+}
+
+function pnpmActionSetups(workflow: Record<string, unknown>): Array<{ jobName: string; step: Record<string, unknown> }> {
+  if (!isRecord(workflow.jobs)) throw new TypeError('workflow must define jobs')
+  const setups: Array<{ jobName: string; step: Record<string, unknown> }> = []
+  for (const [jobName, job] of Object.entries(workflow.jobs)) {
+    if (!isRecord(job) || !Array.isArray(job.steps)) continue
+    for (const step of job.steps) {
+      if (!isRecord(step) || typeof step.uses !== 'string' || !step.uses.startsWith('pnpm/action-setup@')) continue
+      setups.push({ jobName, step })
+    }
+  }
+  return setups
+}
+
+function runSteps(job: Record<string, unknown>): Array<Record<string, unknown> & { run: string }> {
+  if (!Array.isArray(job.steps)) throw new TypeError('job must define steps')
+  return job.steps.filter((step): step is Record<string, unknown> & { run: string } => (
+    isRecord(step) && typeof step.run === 'string'
+  ))
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
