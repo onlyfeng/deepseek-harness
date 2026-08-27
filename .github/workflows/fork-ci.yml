@@ -27,6 +27,11 @@ name: Fork CI
 #     DSH_SNAPSHOT_MAX_CONCURRENCY=1 so the SSE keep-alive comment test is not
 #     starved. persistent-pwsh-tool-turn skips its run on github-hosted
 #     (RUNNER_ENVIRONMENT); the persistent PTY returns shell-init scrollback.
+#   - check:ci:artifacts, then duplication and built-output doc typecheck: the
+#     consumer-lane artifact checks that snapshots omit (publint, built-package
+#     invariants, verify-node-next-types, built-bin smokes). Playwright web
+#     snapshots stay omitted (Chromium install; not a hosted-runner substitute
+#     for the private consumer pool).
 #   - node-compat matrix (22.19 and 26): the hosted compatibility smokes.
 #   - python-sdk and python-runtime: the hosted Python SDK suite and the
 #     release-shaped Linux x64 runtime builder.
@@ -146,6 +151,46 @@ jobs:
       - name: Run snapshot aggregate
         run: pnpm run check:ci:snapshot
 
+  artifacts:
+    name: node 24 / artifacts
+    if: github.repository == 'onlyfeng/deepseek-harness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DSH_GATE_CONCURRENCY: '4'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install (immutable)
+        run: pnpm install --frozen-lockfile
+
+      # Official build plus publint, built-package invariants, NodeNext types,
+      # and built-bin smokes. Snapshots already run snapshotGate(); this job
+      # owns the remaining consumer-lane artifact checks. Duplication and
+      # built-output doc typecheck sit in ciConsumerGates() beside those
+      # checks and are not inside check:ci:artifacts.
+      - name: Run artifact aggregate
+        run: pnpm run check:ci:artifacts
+
+      - name: Duplication
+        run: pnpm run duplication
+
+      - name: Built-output doc typecheck
+        env:
+          DSH_DOC_TYPECHECK_USE_BUILD_OUTPUT: '1'
+        run: pnpm run doc-typecheck:contracts-ready
+
   node-compat:
     if: github.repository == 'onlyfeng/deepseek-harness'
     runs-on: ${{ matrix.runner }}
@@ -254,7 +299,7 @@ jobs:
 
   fork-checks-passed:
     name: fork checks passed
-    needs: [static, snapshots, node-compat, python-sdk, python-runtime, windows]
+    needs: [static, snapshots, artifacts, node-compat, python-sdk, python-runtime, windows]
     # always() so a failed dependency fails this gate instead of skipping it
     # (a skipped required check counts as passing on GitHub).
     if: always() && github.repository == 'onlyfeng/deepseek-harness'

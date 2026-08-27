@@ -240,14 +240,16 @@ describe('Fork CI workflow', () => {
     const workflow = loadWorkflow('.github/workflows/fork-ci.yml')
     const staticJob = workflowJob(workflow, 'static')
     const snapshots = workflowJob(workflow, 'snapshots')
+    const artifacts = workflowJob(workflow, 'artifacts')
     const nodeCompat = workflowJob(workflow, 'node-compat')
     const pythonSdk = workflowJob(workflow, 'python-sdk')
     const pythonRuntime = workflowJob(workflow, 'python-runtime')
     const windows = workflowJob(workflow, 'windows')
     const aggregate = workflowJob(workflow, 'fork-checks-passed')
     if (!isRecord(workflow.jobs) || !Array.isArray(aggregate.needs) || !Array.isArray(staticJob.steps)
-      || !Array.isArray(snapshots.steps) || !Array.isArray(windows.steps) || !isRecord(nodeCompat.strategy)) {
-      throw new TypeError('Fork CI must define static, snapshots, node-compat, windows steps and an aggregate needs list')
+      || !Array.isArray(snapshots.steps) || !Array.isArray(artifacts.steps) || !Array.isArray(windows.steps)
+      || !isRecord(nodeCompat.strategy)) {
+      throw new TypeError('Fork CI must define static, snapshots, artifacts, node-compat, windows steps and an aggregate needs list')
     }
 
     expect(workflow.name).toBe('Fork CI')
@@ -289,6 +291,25 @@ describe('Fork CI workflow', () => {
     expect(bubblewrap).toBeLessThan(snapshotGate)
     expect(JSON.stringify(snapshots.steps)).not.toContain('pnpm run test:snapshot')
 
+    const artifactCommands = artifacts.steps.filter((step): step is Record<string, unknown> & { run: string } => (
+      isRecord(step) && typeof step.run === 'string'
+    ))
+    expect(artifacts['runs-on']).toBe('ubuntu-latest')
+    const artifactRuns = artifactCommands.map(step => step.run)
+    const artifactAggregate = artifactRuns.indexOf('pnpm run check:ci:artifacts')
+    const duplication = artifactRuns.indexOf('pnpm run duplication')
+    const docTypecheck = artifactRuns.indexOf('pnpm run doc-typecheck:contracts-ready')
+    expect(artifactAggregate).toBeGreaterThanOrEqual(0)
+    expect(artifactAggregate).toBeLessThan(duplication)
+    expect(duplication).toBeLessThan(docTypecheck)
+    expect(artifactCommands.some(step => (
+      isRecord(step.env)
+      && step.run === 'pnpm run doc-typecheck:contracts-ready'
+      && step.env.DSH_DOC_TYPECHECK_USE_BUILD_OUTPUT === '1'
+    ))).toBe(true)
+    expect(JSON.stringify(artifacts.steps)).not.toContain('check:ci:consumers')
+    expect(JSON.stringify(artifacts.steps)).not.toContain('test:web')
+
     expect(nodeCompat['runs-on']).toBe('${{ matrix.runner }}')
     expect(nodeCompat.strategy).toMatchObject({
       'fail-fast': false,
@@ -325,6 +346,7 @@ describe('Fork CI workflow', () => {
     expect(aggregate.needs).toEqual([
       'static',
       'snapshots',
+      'artifacts',
       'node-compat',
       'python-sdk',
       'python-runtime',
