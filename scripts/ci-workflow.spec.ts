@@ -285,8 +285,19 @@ describe('Fork CI workflow', () => {
       && step.run === 'pnpm run doc-typecheck:contracts-ready'
       && step.env.DSH_DOC_TYPECHECK_USE_BUILD_OUTPUT === '1'
     ))).toBe(true)
+    expect(artifacts.name).toBe('node 24 / artifacts and web snapshots')
+    expect(artifacts.env).toMatchObject({ DSH_WEB_SNAPSHOT_WORKERS: '2' })
+    const playwright = artifactRuns.findIndex(run => run.includes('playwright install --with-deps chromium'))
+    const webSnapshots = artifactRuns.indexOf('pnpm run test:web:ci')
+    expect(docTypecheck).toBeLessThan(playwright)
+    expect(playwright).toBeLessThan(webSnapshots)
+    expect(artifactCommands.some(step => (
+      isRecord(step.env)
+      && step.run === 'pnpm run test:web:ci'
+      && step.env.DSH_SNAPSHOT === 'replay'
+    ))).toBe(true)
+    expect(JSON.stringify(artifacts.steps)).toContain('actions/cache/restore@')
     expect(JSON.stringify(artifacts.steps)).not.toContain('check:ci:consumers')
-    expect(JSON.stringify(artifacts.steps)).not.toContain('test:web')
 
     expect(nodeCompat['runs-on']).toBe('${{ matrix.runner }}')
     expect(nodeCompat.strategy).toMatchObject({
