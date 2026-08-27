@@ -289,6 +289,9 @@ describe('Fork CI workflow', () => {
     expect(artifacts.env).toMatchObject({ DSH_WEB_SNAPSHOT_WORKERS: '2' })
     const playwright = artifactRuns.findIndex(run => run.includes('playwright install --with-deps chromium'))
     const webSnapshots = artifactRuns.indexOf('pnpm run test:web:ci')
+    const artifactBubblewrap = artifactRuns.findIndex(run => run.includes('prepare-ci-bubblewrap.sh'))
+    expect(artifactBubblewrap).toBeGreaterThanOrEqual(0)
+    expect(artifactBubblewrap).toBeLessThan(webSnapshots)
     expect(docTypecheck).toBeLessThan(playwright)
     expect(playwright).toBeLessThan(webSnapshots)
     expect(artifactCommands.some(step => (
@@ -305,6 +308,7 @@ describe('Fork CI workflow', () => {
       matrix: {
         include: [
           { node: '22.19', name: 'node 22.19', runner: 'ubuntu-latest', gate_concurrency: '1' },
+          { node: 24, name: 'node 24', runner: 'ubuntu-latest', gate_concurrency: '1' },
           { node: 26, name: 'node 26', runner: 'ubuntu-latest', gate_concurrency: '1' },
         ],
       },

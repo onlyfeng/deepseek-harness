@@ -30,10 +30,13 @@ name: Fork CI
 #   - check:ci:artifacts, then duplication, built-output doc typecheck, and
 #     Playwright web snapshots: the consumer-lane artifact checks that
 #     snapshots omit (publint, built-package invariants, verify-node-next-types,
-#     built-bin smokes), then Chromium via playwright install --with-deps and
-#     DSH_SNAPSHOT=replay test:web:ci. Hosted ubuntu-latest has 4 CPUs, so
+#     built-bin smokes), then prepare-ci-bubblewrap.sh, Chromium via
+#     playwright install --with-deps, and DSH_SNAPSHOT=replay test:web:ci.
+#     Lib-mode Web snapshots request workspace-write and refuse to run
+#     unconfined. Hosted ubuntu-latest has 4 CPUs, so
 #     DSH_WEB_SNAPSHOT_WORKERS=2 (upstream uses 6 on the 16-core pool).
-#   - node-compat matrix (22.19 and 26): the hosted compatibility smokes.
+#   - node-compat matrix (22.19, 24, and 26): the hosted 22.19/26 smokes plus
+#     the Node 24 check:node-compat the disabled consumer lane ran.
 #   - python-sdk and python-runtime: the hosted Python SDK suite and the
 #     release-shaped Linux x64 runtime builder.
 #   - wine Windows gate: the same hosted `windows` lane ci.yml runs on
@@ -186,6 +189,12 @@ jobs:
       - name: Install (immutable)
         run: pnpm install --frozen-lockfile
 
+      # Lib-mode Web snapshots request workspace-write and refuse to run
+      # unconfined. The script writes bwrap onto GITHUB_PATH for later steps;
+      # the functional probe is the authority.
+      - name: Prepare bubblewrap
+        run: bash scripts/prepare-ci-bubblewrap.sh
+
       # Official build plus publint, built-package invariants, NodeNext types,
       # and built-bin smokes. Snapshots already run snapshotGate(); this job
       # owns the remaining consumer-lane artifact checks. Duplication and
@@ -225,6 +234,10 @@ jobs:
         include:
           - node: '22.19'
             name: node 22.19
+            runner: ubuntu-latest
+            gate_concurrency: '1'
+          - node: 24
+            name: node 24
             runner: ubuntu-latest
             gate_concurrency: '1'
           - node: 26
