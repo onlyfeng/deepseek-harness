@@ -502,6 +502,13 @@ describe('scenarioSkipped', () => {
     expect(scenarioSkipped(pwsh, false, 'linux', true)).toBe(false)
     expect(scenarioSkipped(authored, false, 'linux', false)).toBe(false)
   })
+
+  it('skips skipRun scenarios on every host while leaving other scenarios running', () => {
+    const skipped: Scenario = { name: 'hosted-pty', hasModelTurn: true, recorded: true, skipRun: true }
+    expect(scenarioSkipped(skipped, false, 'linux', true)).toBe(true)
+    expect(scenarioSkipped(skipped, false, 'win32', true)).toBe(true)
+    expect(scenarioSkipped(authored, false, 'linux', true)).toBe(false)
+  })
 })
 
 describe('fixtureContext', () => {

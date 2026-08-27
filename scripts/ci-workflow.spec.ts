@@ -9,19 +9,8 @@ const nativeWindowsPnpmDestination = '${{ runner.temp }}/setup-pnpm-js'
 
 describe('CI workflow', () => {
   it('isolates every pnpm action setup destination per runner', () => {
-    const files = ['.github/workflows/ci.yml', '.github/workflows/ci-master.yml']
-    const setups: Array<{ jobName: string; step: unknown }> = []
-    for (const file of files) {
-      const workflow: unknown = yaml.load(readFileSync(resolve(root, file), 'utf8'))
-      if (!isRecord(workflow) || !isRecord(workflow.jobs)) throw new TypeError(`${file} must define jobs`)
-      for (const [jobName, job] of Object.entries(workflow.jobs)) {
-        if (!isRecord(job) || !Array.isArray(job.steps)) continue
-        for (const step of job.steps) {
-          if (!isRecord(step) || typeof step.uses !== 'string' || !step.uses.startsWith('pnpm/action-setup@')) continue
-          setups.push({ jobName, step })
-        }
-      }
-    }
+    const setups = ['.github/workflows/ci.yml', '.github/workflows/ci-master.yml']
+      .flatMap(file => pnpmActionSetups(loadWorkflow(file)))
 
     expect(setups.length).toBeGreaterThan(0)
     for (const { jobName, step } of setups) {
@@ -63,9 +52,7 @@ describe('CI workflow', () => {
     if (!Array.isArray(windows.steps) || !Array.isArray(aggregate.needs)) {
       throw new TypeError('Windows job must define steps and the aggregate must define needs')
     }
-    const commandSteps = windows.steps.filter((step): step is Record<string, unknown> & { run: string } => (
-      isRecord(step) && typeof step.run === 'string'
-    ))
+    const commandSteps = runSteps(windows)
 
     // Required PR job: Wine on ubuntu-latest, runs wine-windows-gates.sh.
     expect(windows['runs-on']).toBe('ubuntu-latest')
@@ -86,10 +73,7 @@ describe('CI workflow', () => {
     expect(windowsNative.env).toMatchObject({
       DSH_COVERAGE_TEST_TIMEOUT_MS: '30000',
     })
-    const nativeSteps = windowsNative.steps as unknown[]
-    const nativeCommandSteps = nativeSteps.filter((step): step is Record<string, unknown> & { run: string } => (
-      isRecord(step) && typeof step.run === 'string'
-    ))
+    const nativeCommandSteps = runSteps(windowsNative)
     expect(nativeCommandSteps.map(step => step.run)).toContain('pnpm run check:ci:windows-complete')
 
     // wine-apt-cache: master-only, seeds the Wine apt cache, lives in ci-master.
@@ -232,6 +216,145 @@ describe('CI workflow', () => {
 
     expect(config).not.toContain("pool: process.platform === 'win32' ? 'threads' : 'forks'")
     expect(config.match(/pool: 'forks'/g)).toHaveLength(2)
+  })
+})
+
+describe('Fork CI workflow', () => {
+  it('reproduces hosted upstream jobs and the static/snapshot aggregates without private runners', () => {
+    const workflow = loadWorkflow('.github/workflows/fork-ci.yml')
+    const staticJob = workflowJob(workflow, 'static')
+    const snapshots = workflowJob(workflow, 'snapshots')
+    const artifacts = workflowJob(workflow, 'artifacts')
+    const nodeCompat = workflowJob(workflow, 'node-compat')
+    const pythonSdk = workflowJob(workflow, 'python-sdk')
+    const pythonRuntime = workflowJob(workflow, 'python-runtime')
+    const windows = workflowJob(workflow, 'windows')
+    const aggregate = workflowJob(workflow, 'fork-checks-passed')
+    if (!isRecord(workflow.jobs) || !Array.isArray(aggregate.needs) || !Array.isArray(staticJob.steps)
+      || !Array.isArray(snapshots.steps) || !Array.isArray(artifacts.steps) || !Array.isArray(windows.steps)
+      || !isRecord(nodeCompat.strategy)) {
+      throw new TypeError('Fork CI must define static, snapshots, artifacts, node-compat, windows steps and an aggregate needs list')
+    }
+
+    expect(workflow.name).toBe('Fork CI')
+    expect(Object.keys(workflow.on as object).sort()).toEqual(['pull_request', 'push'])
+    expect(workflow.jobs).not.toHaveProperty('node-24-coverage')
+    expect(workflow.jobs).not.toHaveProperty('windows-native')
+
+    const staticCheckout = staticJob.steps.find((step): step is Record<string, unknown> => (
+      isRecord(step) && typeof step.uses === 'string' && step.uses.startsWith('actions/checkout@')
+    ))
+    const staticCommands = runSteps(staticJob)
+    expect(staticJob['runs-on']).toBe('ubuntu-latest')
+    expect(staticCheckout).toMatchObject({ with: { 'fetch-depth': 0 } })
+    expect(staticCommands.some(step => step.run === 'pnpm run check:ci:static')).toBe(true)
+    expect(staticCommands.some(step => (
+      isRecord(step.env) && step.run === 'pnpm run check:ci:static' && typeof step.env.DSH_ARCHIVE_BASE_REF === 'string'
+    ))).toBe(true)
+    const staticRuns = staticCommands.map(step => step.run)
+    const hostBuild = staticRuns.indexOf('pnpm run build:lib:host')
+    const typecheck = staticRuns.indexOf('pnpm run typecheck:contracts-ready')
+    expect(hostBuild).toBeGreaterThanOrEqual(0)
+    expect(hostBuild).toBeLessThan(typecheck)
+    expect(staticRuns).toEqual(expect.arrayContaining([
+      'pnpm run typecheck:contracts-ready',
+      'pnpm run lint:contracts-ready',
+    ]))
+
+    const snapshotCommands = runSteps(snapshots)
+    expect(snapshots['runs-on']).toBe('ubuntu-latest')
+    expect(snapshots.env).toMatchObject({ DSH_SNAPSHOT_MAX_CONCURRENCY: '1' })
+    const snapshotRuns = snapshotCommands.map(step => step.run)
+    const bubblewrap = snapshotRuns.findIndex(run => run.includes('prepare-ci-bubblewrap.sh'))
+    const snapshotGate = snapshotRuns.indexOf('pnpm run check:ci:snapshot')
+    expect(bubblewrap).toBeGreaterThanOrEqual(0)
+    expect(bubblewrap).toBeLessThan(snapshotGate)
+    expect(JSON.stringify(snapshots.steps)).not.toContain('pnpm run test:snapshot')
+
+    const artifactCommands = runSteps(artifacts)
+    expect(artifacts['runs-on']).toBe('ubuntu-latest')
+    const artifactRuns = artifactCommands.map(step => step.run)
+    const artifactAggregate = artifactRuns.indexOf('pnpm run check:ci:artifacts')
+    const duplication = artifactRuns.indexOf('pnpm run duplication')
+    const docTypecheck = artifactRuns.indexOf('pnpm run doc-typecheck:contracts-ready')
+    expect(artifactAggregate).toBeGreaterThanOrEqual(0)
+    expect(artifactAggregate).toBeLessThan(duplication)
+    expect(duplication).toBeLessThan(docTypecheck)
+    expect(artifactCommands.some(step => (
+      isRecord(step.env)
+      && step.run === 'pnpm run doc-typecheck:contracts-ready'
+      && step.env.DSH_DOC_TYPECHECK_USE_BUILD_OUTPUT === '1'
+    ))).toBe(true)
+    expect(artifacts.name).toBe('node 24 / artifacts and web snapshots')
+    expect(artifacts.env).toMatchObject({ DSH_WEB_SNAPSHOT_WORKERS: '2' })
+    const playwright = artifactRuns.findIndex(run => run.includes('playwright install --with-deps chromium'))
+    const webSnapshots = artifactRuns.indexOf('pnpm run test:web:ci')
+    const artifactBubblewrap = artifactRuns.findIndex(run => run.includes('prepare-ci-bubblewrap.sh'))
+    expect(artifactBubblewrap).toBeGreaterThanOrEqual(0)
+    expect(artifactBubblewrap).toBeLessThan(webSnapshots)
+    expect(docTypecheck).toBeLessThan(playwright)
+    expect(playwright).toBeLessThan(webSnapshots)
+    expect(artifactCommands.some(step => (
+      isRecord(step.env)
+      && step.run === 'pnpm run test:web:ci'
+      && step.env.DSH_SNAPSHOT === 'replay'
+    ))).toBe(true)
+    expect(JSON.stringify(artifacts.steps)).toContain('actions/cache/restore@')
+    expect(JSON.stringify(artifacts.steps)).not.toContain('check:ci:consumers')
+
+    expect(nodeCompat['runs-on']).toBe('${{ matrix.runner }}')
+    expect(nodeCompat.strategy).toMatchObject({
+      'fail-fast': false,
+      matrix: {
+        include: [
+          { node: '22.19', name: 'node 22.19', runner: 'ubuntu-latest', gate_concurrency: '1' },
+          { node: 24, name: 'node 24', runner: 'ubuntu-latest', gate_concurrency: '1' },
+          { node: 26, name: 'node 26', runner: 'ubuntu-latest', gate_concurrency: '1' },
+        ],
+      },
+    })
+
+    expect(pythonSdk).toMatchObject({
+      'runs-on': 'ubuntu-latest',
+      name: 'python 3.10 / keyless SDK',
+    })
+    expect(JSON.stringify(pythonSdk.steps)).toContain('uv run --python 3.10 --group test --project python/sdk pytest')
+
+    expect(pythonRuntime).toMatchObject({
+      name: 'python runtime / release-shaped Linux x64',
+      uses: './.github/workflows/build-exe-for-python-sdk.yml',
+      with: {
+        targets: 'node24-linux-x64',
+        ci: true,
+      },
+    })
+
+    const windowsCommands = runSteps(windows)
+    expect(windows['runs-on']).toBe('ubuntu-latest')
+    expect(windows.name).toBe('windows node 24 / wine blocking')
+    expect(windowsCommands.some(step => step.run.includes('wine-windows-gates.sh'))).toBe(true)
+
+    expect(aggregate.needs).toEqual([
+      'static',
+      'snapshots',
+      'artifacts',
+      'node-compat',
+      'python-sdk',
+      'python-runtime',
+      'windows',
+    ])
+    expect(aggregate.if).toContain('always()')
+  })
+
+  it('isolates every pnpm action setup destination on the fork gate', () => {
+    const setups = pnpmActionSetups(loadWorkflow('.github/workflows/fork-ci.yml'))
+
+    expect(setups.length).toBeGreaterThan(0)
+    for (const { jobName, step } of setups) {
+      expect(step, `${jobName} must not share pnpm/action-setup's default destination`).toMatchObject({
+        with: { dest: runnerPrivatePnpmDestination },
+      })
+    }
   })
 })
 
@@ -557,6 +680,26 @@ function workflowJob(workflow: Record<string, unknown>, job: string): Record<str
     throw new TypeError(`workflow must define the ${job} job`)
   }
   return workflow.jobs[job]
+}
+
+function pnpmActionSetups(workflow: Record<string, unknown>): Array<{ jobName: string; step: Record<string, unknown> }> {
+  if (!isRecord(workflow.jobs)) throw new TypeError('workflow must define jobs')
+  const setups: Array<{ jobName: string; step: Record<string, unknown> }> = []
+  for (const [jobName, job] of Object.entries(workflow.jobs)) {
+    if (!isRecord(job) || !Array.isArray(job.steps)) continue
+    for (const step of job.steps) {
+      if (!isRecord(step) || typeof step.uses !== 'string' || !step.uses.startsWith('pnpm/action-setup@')) continue
+      setups.push({ jobName, step })
+    }
+  }
+  return setups
+}
+
+function runSteps(job: Record<string, unknown>): Array<Record<string, unknown> & { run: string }> {
+  if (!Array.isArray(job.steps)) throw new TypeError('job must define steps')
+  return job.steps.filter((step): step is Record<string, unknown> & { run: string } => (
+    isRecord(step) && typeof step.run === 'string'
+  ))
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
