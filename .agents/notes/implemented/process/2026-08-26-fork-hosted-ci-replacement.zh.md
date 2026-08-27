@@ -48,6 +48,8 @@ Status: implemented
 
 **安装 Chromium 后直接跑 `test:web:ci`，却不准备 bubblewrap。** 库模式 Web 快照请求 `workspace-write` 并拒绝在无沙箱后端时运行，因此托管 Playwright 会以沙箱错误失败，而不是断言已录制的 UI。
 
+**把 steer-all 的 mid golden 钉在问题卡片出现之前的帧（textarea + Stop generating）。** `captureStableAria` 会轮询直到连续两帧相同。在较空闲的托管 runner 上，问题卡片会在该轮询内出现，因此已提交的「卡片出现前」树并不是稳定里程碑。mid 快照先等待 `[data-question-key]`，与单条 steer 场景一致。
+
 **在托管的 `persistent-pwsh-tool-turn` 上取消 `skipRun`，刷新 golden，或改 terminal/pwsh 的提示结算，使 GitHub 托管 PTY 输出命令结果。** 托管上的实际结果是 shell 初始化回滚缓冲，而不是 `PWSH_OK`。把该输出录进去会钉死损坏的 PTY。改变提示结算是产品 terminal 行为；同一类托管 PTY 问题也是覆盖率和 terminal/shell 单元套件被省略的原因。一次性 `pwsh-tool-turn` 仍会运行。fixture 保护仍覆盖已提交文件。`RUNNER_ENVIRONMENT` 只在 GitHub 托管镜像上为 `github-hosted`，因此自托管私有 runner 仍会执行该持久场景。
 
 **只复现托管的 Node 22.19 / 26 矩阵。** 这与 `ci.yml` 的 `node-compat` 作业一致，但会丢掉被禁用的 consumer 通道在 Node 24 上运行的 `check:node-compat` 冒烟。source-worker、Zstandard、source-launch 或 jsdom 上仅 Node 24 的失败随后仍能满足 `fork checks passed`。

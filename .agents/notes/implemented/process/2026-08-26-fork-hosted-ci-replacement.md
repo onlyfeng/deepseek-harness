@@ -48,6 +48,8 @@ Each job is guarded with `github.repository == 'onlyfeng/deepseek-harness'` so a
 
 **Run `test:web:ci` after installing Chromium but without preparing bubblewrap.** Lib-mode Web snapshots request `workspace-write` and refuse to run unconfined, so hosted Playwright fails with a sandbox-backend error instead of asserting the recorded UI.
 
+**Keep the steer-all mid golden on the pre-composer frame (textarea + Stop generating).** `captureStableAria` polls until two consecutive frames match. On a quiet hosted runner the question composer arrives inside that poll, so the committed pre-composer tree is not a stable milestone. The mid snapshot waits for `[data-question-key]` first, matching the single-steer scenario.
+
 **Clear `skipRun` on hosted `persistent-pwsh-tool-turn` and refresh the golden, or change terminal/pwsh prompt settlement so GitHub-hosted PTYs emit command output.** The live hosted result is shell-init scrollback, not `PWSH_OK`. Recording that output would pin a broken PTY. Changing prompt settlement is product terminal behavior; the same hosted PTY class is why coverage and the terminal/shell unit suites stay omitted. One-shot `pwsh-tool-turn` still runs. Fixture guards still cover the committed files. `RUNNER_ENVIRONMENT` is `github-hosted` only on GitHub-hosted images, so a self-hosted private runner still executes the persistent scenario.
 
 **Reproduce only the hosted Node 22.19 / 26 matrix.** That matches `ci.yml`'s `node-compat` job and omits the Node 24 `check:node-compat` smokes the disabled consumer lane ran. A Node-24-only failure in source-worker, Zstandard, source-launch, or jsdom then satisfies `fork checks passed`.
