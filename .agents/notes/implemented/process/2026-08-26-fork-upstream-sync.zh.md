@@ -18,7 +18,7 @@ Status: implemented
 
 当 `origin/master` 是 `upstream/master` 的祖先时，将其快进到该提交；若不是，作业失败且不强推。当 `dev/compat` 尚未包含 `upstream/master` 时，作业打开或复用 `master` → `dev/compat` 的拉取请求，供人工解决冲突后合并。
 
-checkout、镜像推送和 `gh pr create` 使用仓库密钥 `UPSTREAM_SYNC_TOKEN` 鉴权。可接受的值是：Contents、Pull requests 与 Workflows 均为 Read and write 的细粒度个人访问令牌（PAT）；带 `repo` 与 `workflow` 的 classic PAT；或具有相同仓库权限的 GitHub App 安装令牌。密钥为空时在 fetch 之前失败，错误信息会写出密钥名和所需权限。
+checkout、镜像推送和 `gh pr create` 使用仓库密钥 `UPSTREAM_SYNC_TOKEN` 鉴权。可接受的值是：Contents、Pull requests 与 Workflows 均为 Read and write 的细粒度个人访问令牌（PAT），或带 `repo` 与 `workflow` 的 classic PAT。GitHub App 安装令牌不是可接受值：它们一小时后过期，不能作为这个静态密钥。密钥为空时在 fetch 之前失败，错误信息会写出密钥名和所需权限。
 
 操作者在本 fork 上禁用上游 `CI` 和 `CI master`。这些工作流文件保持未修改，因此合并 `master` 不会在 `on:` 或 `runs-on` 上冲突。
 
@@ -32,7 +32,7 @@ checkout、镜像推送和 `gh pr create` 使用仓库密钥 `UPSTREAM_SYNC_TOKE
 
 **推送侧分支并从该分支开集成 PR，让 `master` 落后。** 推送上游提交仍然需要 Workflows write，且 `origin/master` 不再是上游尖端。
 
-**强制使用专用 GitHub App，不允许同一密钥里放 PAT。** GitHub App 安装令牌已是 `UPSTREAM_SYNC_TOKEN` 的可接受值。强制建 App 增加设置，并不改变推送所需的权限。
+**把 GitHub App 安装令牌存进 `UPSTREAM_SYNC_TOKEN`，或每次运行从 App 凭据签发一个。** 安装访问令牌一小时后过期，静态 Actions 密钥撑不过每日 cron。每次签发需要 App ID、私钥，以及作业里的 JWT 签发——多出来的密钥和步骤并不会改变 PAT 已经具备的 Contents / Pull requests / Workflows 权限。
 
 **取消定时，只从人工 clone 同步。** 这放弃无人值守追齐；一旦存好密钥，`workflow_dispatch` 仍可用。
 

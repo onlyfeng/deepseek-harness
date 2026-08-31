@@ -12,11 +12,11 @@ name: Upstream Sync
 # `github.token` cannot create or update `.github/workflows/*`. Checkout, the
 # mirror push, and `gh pr create` therefore authenticate with repository secret
 # `UPSTREAM_SYNC_TOKEN` (a fine-grained PAT with Contents, Pull requests, and
-# Workflows read/write; a classic PAT with `repo` and `workflow`; or a GitHub
-# App installation token with the same repository permissions). A
-# token-authenticated push to `master` fires this fork's still-enabled
-# `on: push` workflows; operators disable upstream `CI` and `CI master` so
-# private-runner jobs do not queue. Rationale:
+# Workflows read/write, or a classic PAT with `repo` and `workflow`). Do not
+# store a GitHub App installation token: those expire in one hour, so a static
+# secret cannot survive the daily cron. A token-authenticated push to `master`
+# fires this fork's still-enabled `on: push` workflows; operators disable
+# upstream `CI` and `CI master` so private-runner jobs do not queue. Rationale:
 # .agents/notes/implemented/process/2026-08-26-fork-upstream-sync.md
 
 on:
@@ -50,7 +50,7 @@ jobs:
       - name: Require UPSTREAM_SYNC_TOKEN
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::Repository secret UPSTREAM_SYNC_TOKEN is empty. github.token cannot create or update files under .github/workflows/. Store a fine-grained PAT (Contents, Pull requests, and Workflows: Read and write), a classic PAT (repo and workflow), or a GitHub App installation token with those repository permissions as Actions secret UPSTREAM_SYNC_TOKEN. Disable the upstream CI master workflow so a token-authenticated master push does not queue private-runner jobs."
+            echo "::error::Repository secret UPSTREAM_SYNC_TOKEN is empty. github.token cannot create or update files under .github/workflows/. Store a fine-grained PAT (Contents, Pull requests, and Workflows: Read and write) or a classic PAT (repo and workflow) as Actions secret UPSTREAM_SYNC_TOKEN. A GitHub App installation token expires in one hour and cannot be this static secret. Disable the upstream CI master workflow so a token-authenticated master push does not queue private-runner jobs."
             exit 1
           fi
 

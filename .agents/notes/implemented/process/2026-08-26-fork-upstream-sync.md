@@ -18,7 +18,7 @@ A token that *can* update workflow files also fires this fork's remaining `on: p
 
 `origin/master` fast-forwards to `upstream/master` when it is an ancestor of that commit, and the job fails without force-pushing when it is not. When `dev/compat` does not contain `upstream/master`, the job opens or reuses a `master` → `dev/compat` pull request for a human to merge after resolving conflicts.
 
-Checkout, the mirror push, and `gh pr create` authenticate with repository secret `UPSTREAM_SYNC_TOKEN`. Accepted values are a fine-grained PAT with Contents, Pull requests, and Workflows set to Read and write; a classic PAT with `repo` and `workflow`; or a GitHub App installation token with those repository permissions. An empty secret fails before fetch, with an error that names the secret and the required scopes.
+Checkout, the mirror push, and `gh pr create` authenticate with repository secret `UPSTREAM_SYNC_TOKEN`. Accepted values are a fine-grained PAT with Contents, Pull requests, and Workflows set to Read and write, or a classic PAT with `repo` and `workflow`. A GitHub App installation token is not an accepted value: those expire after one hour and cannot be this static secret. An empty secret fails before fetch, with an error that names the secret and the required scopes.
 
 Operators disable upstream `CI` and `CI master` on this fork. The workflow files stay unmodified so merging `master` does not conflict on `on:` or `runs-on`.
 
@@ -32,7 +32,7 @@ Operators disable upstream `CI` and `CI master` on this fork. The workflow files
 
 **Push a side branch and open the integration PR from that branch, leaving `master` stale.** Any push of upstream commits still needs Workflows write, and `origin/master` would no longer be the upstream tip.
 
-**Require a dedicated GitHub App instead of allowing a PAT in the same secret.** A GitHub App installation token is an accepted value of `UPSTREAM_SYNC_TOKEN`. Mandating an app adds setup without changing the permission the push needs.
+**Store a GitHub App installation token in `UPSTREAM_SYNC_TOKEN`, or mint one from App credentials on each run.** Installation access tokens expire after one hour, so a static Actions secret cannot survive the daily cron. Per-run minting needs the App ID, private key, and JWT issuance in the job — extra secrets and steps that do not change the Contents / Pull requests / Workflows permission a PAT already grants.
 
 **Drop the schedule and sync only from a human clone.** That abandons unattended catch-up; `workflow_dispatch` remains available once the secret is stored.
 
