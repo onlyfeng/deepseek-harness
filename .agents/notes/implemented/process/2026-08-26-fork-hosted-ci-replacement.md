@@ -14,7 +14,7 @@ Editing `ci.yml` to retarget those private-runner jobs onto `ubuntu-latest` woul
 
 ## Decision
 
-[`.github/workflows/fork-ci.yml`](../../../../.github/workflows/fork-ci.yml) is the required pull-request and `dev/compat` push gate on `onlyfeng/deepseek-harness`. The file does not exist upstream, so merging `master` does not conflict with it. Operators disable the upstream `CI` workflow on this fork; the workflow file itself stays unmodified.
+[`.github/workflows/fork-ci.yml`](../../../../.github/workflows/fork-ci.yml) is the required pull-request and `dev/compat` push gate on `onlyfeng/deepseek-harness`. The file does not exist upstream, so merging `master` does not conflict with it. Operators disable the upstream `CI` and `CI master` workflows on this fork; both bind jobs to private runner labels this fork cannot allocate. The workflow files themselves stay unmodified.
 
 `fork checks passed` depends on every job this workflow can run on standard hosted runners:
 

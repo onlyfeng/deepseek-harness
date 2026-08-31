@@ -8,6 +8,16 @@ name: Upstream Sync
 # Scheduled runs only fire from the repository's default branch, so this file
 # must live on the default branch (set it to dev/compat) for the cron to
 # trigger; workflow_dispatch works from any branch that has this file.
+#
+# `github.token` cannot create or update `.github/workflows/*`. Checkout, the
+# mirror push, and `gh pr create` therefore authenticate with repository secret
+# `UPSTREAM_SYNC_TOKEN` (a fine-grained PAT with Contents, Pull requests, and
+# Workflows read/write, or a classic PAT with `repo` and `workflow`). Do not
+# store a GitHub App installation token: those expire in one hour, so a static
+# secret cannot survive the daily cron. A token-authenticated push to `master`
+# fires this fork's still-enabled `on: push` workflows; operators disable
+# upstream `CI` and `CI master` so private-runner jobs do not queue. Rationale:
+# .agents/notes/implemented/process/2026-08-26-fork-upstream-sync.md
 
 on:
   schedule:
@@ -15,6 +25,7 @@ on:
   workflow_dispatch: {}
 
 # Only the source fork runs this; forks-of-the-fork must not mirror.
+# These permissions apply to `github.token` only; the PAT carries its own scopes.
 permissions:
   contents: write
   pull-requests: write
@@ -33,11 +44,21 @@ jobs:
   sync:
     if: github.repository == 'onlyfeng/deepseek-harness'
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
     steps:
+      - name: Require UPSTREAM_SYNC_TOKEN
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Repository secret UPSTREAM_SYNC_TOKEN is empty. github.token cannot create or update files under .github/workflows/. Store a fine-grained PAT (Contents, Pull requests, and Workflows: Read and write) or a classic PAT (repo and workflow) as Actions secret UPSTREAM_SYNC_TOKEN. A GitHub App installation token expires in one hour and cannot be this static secret. Disable the upstream CI master workflow so a token-authenticated master push does not queue private-runner jobs."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: true
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
 
       - name: Configure git identity
         run: |
@@ -68,8 +89,6 @@ jobs:
           fi
 
       - name: Open or refresh integration PR (master -> dev/compat)
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           behind="$(git rev-list --count "origin/$INTEGRATION_BRANCH..upstream/$UPSTREAM_BRANCH")"
           if [ "$behind" -eq 0 ]; then
