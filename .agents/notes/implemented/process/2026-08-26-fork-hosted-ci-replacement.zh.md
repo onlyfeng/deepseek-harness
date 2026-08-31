@@ -14,7 +14,7 @@ Status: implemented
 
 ## 决策
 
-[`.github/workflows/fork-ci.yml`](../../../../.github/workflows/fork-ci.yml) 是 `onlyfeng/deepseek-harness` 上拉取请求与 `dev/compat` 推送的必需门禁。该文件在上游不存在，因此合并 `master` 不会与它冲突。操作者在本 fork 上禁用上游 `CI` 工作流；工作流文件本身保持未修改。
+[`.github/workflows/fork-ci.yml`](../../../../.github/workflows/fork-ci.yml) 是 `onlyfeng/deepseek-harness` 上拉取请求与 `dev/compat` 推送的必需门禁。该文件在上游不存在，因此合并 `master` 不会与它冲突。操作者在本 fork 上禁用上游 `CI` 和 `CI master` 工作流；二者都把作业绑到本 fork 无法分配的私有 runner 标签。这些工作流文件本身保持未修改。
 
 `fork checks passed` 依赖本工作流能在标准托管 runner 上运行的每一项作业：
 
