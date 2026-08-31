@@ -1,7 +1,7 @@
 /** Published dsh web + pnpm dev:web → browser HMR, with no page reload. */
 
 import { existsSync, globSync } from 'node:fs'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { chromium } from 'playwright'
@@ -77,6 +77,9 @@ it('hot-reloads a real client-plugin source edit without refreshing the page', a
   const clientBundlePaths = globSync('packages/*/*/lib/client.js{,.map}', { cwd: REPO_ROOT })
     .map(path => join(REPO_ROOT, path))
   const originalClientBundles = await Promise.all(clientBundlePaths.map(async path => [path, await readFile(path)] as const))
+  const distDir = join(REPO_ROOT, 'apps/web/dist')
+  const distBackup = join(world, 'web-dist')
+  await cp(distDir, distBackup, { recursive: true })
   const originalSource = await readFile(sourcePath)
   const oldText = 'Into the Unknown'
   const sourceNeedle = "'hero.headline': 'Into the Unknown'"
@@ -127,8 +130,13 @@ it('hot-reloads a real client-plugin source edit without refreshing the page', a
   } catch (error) {
     failures.push(error)
   } finally {
-    await writeFile(sourcePath, originalSource).catch((error: unknown) => failures.push(error))
+    // Stop `dev:web` before restoring artifacts: it watches the repo and
+    // rewrites `lib/client.js` plus `apps/web/dist` (Vite `--watch`). The
+    // client digest includes both trees.
     if (watcher !== undefined) await stopTree(watcher).catch((error: unknown) => failures.push(error))
+    await writeFile(sourcePath, originalSource).catch((error: unknown) => failures.push(error))
+    await rm(distDir, { recursive: true, force: true }).catch((error: unknown) => failures.push(error))
+    await cp(distBackup, distDir, { recursive: true }).catch((error: unknown) => failures.push(error))
     await Promise.all(originalClientBundles.map(async ([path, content]) => {
       await writeFile(path, content).catch((error: unknown) => failures.push(error))
     }))
