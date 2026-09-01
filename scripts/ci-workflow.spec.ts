@@ -428,7 +428,9 @@ describe('Fork CI workflow', () => {
       && isRecord(step.env)
       && step.env.DSH_BUILD_CLIENT_PROFILE === 'official'
     ))
-    const snapshotGate = snapshotRuns.findIndex(run => run.includes('pnpm run test:snapshot'))
+    const snapshotGate = snapshotRuns.findIndex(run => (
+      run.includes('vitest.snapshot.config.ts') && run.includes('--testNamePattern')
+    ))
     expect(bubblewrap).toBeGreaterThanOrEqual(0)
     expect(snapshotPlaywright).toBeGreaterThan(bubblewrap)
     expect(officialBuild).toBeGreaterThan(snapshotPlaywright)
@@ -436,13 +438,17 @@ describe('Fork CI workflow', () => {
     const snapshotFilter = snapshotCommands[snapshotGate]
     if (snapshotFilter === undefined || !isRecord(snapshotFilter.env)
       || typeof snapshotFilter.env.DSH_SNAPSHOT_NAME_PATTERN !== 'string') {
-      throw new TypeError('Fork CI snapshots job must run test:snapshot with DSH_SNAPSHOT_NAME_PATTERN')
+      throw new TypeError('Fork CI snapshots job must run vitest.snapshot.config.ts with DSH_SNAPSHOT_NAME_PATTERN')
     }
     expect(snapshotFilter.env).toMatchObject({
       DSH_EXAMPLE_MODE: 'lib',
       DSH_SNAPSHOT_NAME_PATTERN: '^(?!.*pwsh-tool-turn)',
     })
-    expect(snapshotFilter.run).toContain('--testNamePattern "$DSH_SNAPSHOT_NAME_PATTERN"')
+    expect(snapshotFilter.run).toBe(
+      'pnpm exec vitest run --config vitest.snapshot.config.ts --testNamePattern "$DSH_SNAPSHOT_NAME_PATTERN"',
+    )
+    expect(snapshotFilter.run).not.toMatch(/ -- --/)
+    expect(snapshotRuns.some(run => run.includes('pnpm run test:snapshot'))).toBe(false)
     const hostedPwshSkip = new RegExp(snapshotFilter.env.DSH_SNAPSHOT_NAME_PATTERN)
     expect(hostedPwshSkip.test(
       'headless recorded-session snapshots replays persistent-pwsh-tool-turn through dsh --profile headless',
@@ -483,6 +489,7 @@ describe('Fork CI workflow', () => {
       isRecord(step.env)
       && step.run === 'pnpm run test:web:ci'
       && step.env.DSH_SNAPSHOT === 'replay'
+      && step.env.TZ === 'Asia/Shanghai'
     ))).toBe(true)
     expect(JSON.stringify(artifacts.steps)).toContain('actions/cache/restore@')
     expect(JSON.stringify(artifacts.steps)).not.toContain('check:ci:consumers')
