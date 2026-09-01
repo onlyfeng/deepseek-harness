@@ -7,16 +7,21 @@ name: Upstream Sync
 #
 # Scheduled runs only fire from the repository's default branch, so this file
 # must live on the default branch (set it to dev/compat) for the cron to
-# trigger; workflow_dispatch works from any branch that has this file.
+# trigger. workflow_dispatch "Use workflow from" must also be `dev/compat`:
+# this file is absent from the upstream-identical `master`. That picker
+# selects which YAML revision to run, not which branch to fast-forward.
 #
-# `github.token` cannot create or update `.github/workflows/*`. Checkout, the
-# mirror push, and `gh pr create` therefore authenticate with repository secret
+# `github.token` cannot create or update `.github/workflows/*`. Checkout and
+# the mirror push therefore authenticate with repository secret
 # `UPSTREAM_SYNC_TOKEN` (a fine-grained PAT with Contents, Pull requests, and
 # Workflows read/write, or a classic PAT with `repo` and `workflow`). Do not
 # store a GitHub App installation token: those expire in one hour, so a static
-# secret cannot survive the daily cron. A token-authenticated push to `master`
-# fires this fork's still-enabled `on: push` workflows; operators disable
-# upstream `CI` and `CI master` so private-runner jobs do not queue. Rationale:
+# secret cannot survive the daily cron. The integration PR is opened with REST
+# `POST /repos/{owner}/{repo}/pulls`: `gh pr create` uses GraphQL
+# `createPullRequest`, which fine-grained PATs reject even with Pull requests
+# write. A token-authenticated push to `master` fires this fork's still-enabled
+# `on: push` workflows; operators disable upstream `CI` and `CI master` so
+# private-runner jobs do not queue. Rationale:
 # .agents/notes/implemented/process/2026-08-26-fork-upstream-sync.md
 
 on:
@@ -89,19 +94,43 @@ jobs:
           fi
 
       - name: Open or refresh integration PR (master -> dev/compat)
+        env:
+          ACTIONS_GH_TOKEN: ${{ github.token }}
         run: |
           behind="$(git rev-list --count "origin/$INTEGRATION_BRANCH..upstream/$UPSTREAM_BRANCH")"
           if [ "$behind" -eq 0 ]; then
             echo "$INTEGRATION_BRANCH already contains upstream; no integration PR needed."
             exit 0
           fi
-          existing="$(gh pr list --base "$INTEGRATION_BRANCH" --head "$MIRROR_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          head_ref="${GITHUB_REPOSITORY_OWNER}:${MIRROR_BRANCH}"
+          existing="$(gh api \
+            -X GET "repos/${GITHUB_REPOSITORY}/pulls" \
+            -f state=open \
+            -f base="$INTEGRATION_BRANCH" \
+            -f head="$head_ref" \
+            --jq '.[0].number // empty')"
           if [ -n "$existing" ]; then
             echo "Integration PR #$existing is open and tracks $MIRROR_BRANCH automatically ($behind commit(s) ahead)."
-          else
-            gh pr create \
-              --base "$INTEGRATION_BRANCH" \
-              --head "$MIRROR_BRANCH" \
-              --title "chore: 集成上游更新 (${MIRROR_BRANCH} → ${INTEGRATION_BRANCH})" \
-              --body "自动创建:上游 \`${UPSTREAM_BRANCH}\` 有 ${behind} 个 \`${INTEGRATION_BRANCH}\` 尚未包含的提交。请审核并解决可能的冲突后合并。"
+            exit 0
           fi
+          title="chore: 集成上游更新 (${MIRROR_BRANCH} → ${INTEGRATION_BRANCH})"
+          body="自动创建:上游 \`${UPSTREAM_BRANCH}\` 有 ${behind} 个 \`${INTEGRATION_BRANCH}\` 尚未包含的提交。请审核并解决可能的冲突后合并。"
+          payload="$(jq -n \
+            --arg title "$title" \
+            --arg body "$body" \
+            --arg head "$MIRROR_BRANCH" \
+            --arg base "$INTEGRATION_BRANCH" \
+            '{title:$title,body:$body,head:$head,base:$base}')"
+          create_with() {
+            # Fine-grained PATs can POST /pulls while GraphQL createPullRequest
+            # still returns "Resource not accessible by personal access token".
+            GH_TOKEN="$1" gh api "repos/${GITHUB_REPOSITORY}/pulls" --method POST --input - --jq '"Opened integration PR #\(.number) \(.html_url)"' <<<"$payload"
+          }
+          if create_with "$GH_TOKEN"; then
+            exit 0
+          fi
+          if create_with "$ACTIONS_GH_TOKEN"; then
+            exit 0
+          fi
+          echo "::error::Could not create the ${MIRROR_BRANCH} → ${INTEGRATION_BRANCH} integration PR via REST POST /repos/{owner}/{repo}/pulls. gh pr create is not used: GraphQL createPullRequest rejects fine-grained PATs even with Pull requests write. Confirm UPSTREAM_SYNC_TOKEN has Contents, Pull requests, and Workflows: Read and write. If falling back to github.token, enable Settings → Actions → General → Allow GitHub Actions to create and approve pull requests."
+          exit 1
