@@ -422,6 +422,7 @@ describe('Fork CI workflow', () => {
     expect(snapshots.env).toMatchObject({ DSH_SNAPSHOT_MAX_CONCURRENCY: '1' })
     const snapshotRuns = snapshotCommands.map(step => step.run)
     const bubblewrap = snapshotRuns.findIndex(run => run.includes('prepare-ci-bubblewrap.sh'))
+    const snapshotPlaywright = snapshotRuns.findIndex(run => run.includes('playwright install --with-deps chromium'))
     const officialBuild = snapshotCommands.findIndex(step => (
       step.run === 'pnpm run build'
       && isRecord(step.env)
@@ -429,9 +430,30 @@ describe('Fork CI workflow', () => {
     ))
     const snapshotGate = snapshotRuns.findIndex(run => run.includes('pnpm run test:snapshot'))
     expect(bubblewrap).toBeGreaterThanOrEqual(0)
-    expect(officialBuild).toBeGreaterThan(bubblewrap)
+    expect(snapshotPlaywright).toBeGreaterThan(bubblewrap)
+    expect(officialBuild).toBeGreaterThan(snapshotPlaywright)
     expect(snapshotGate).toBeGreaterThan(officialBuild)
-    expect(snapshotRuns[snapshotGate]).toContain('^(?!.*persistent-pwsh-tool-turn)')
+    const snapshotFilter = snapshotCommands[snapshotGate]
+    if (snapshotFilter === undefined || !isRecord(snapshotFilter.env)
+      || typeof snapshotFilter.env.DSH_SNAPSHOT_NAME_PATTERN !== 'string') {
+      throw new TypeError('Fork CI snapshots job must run test:snapshot with DSH_SNAPSHOT_NAME_PATTERN')
+    }
+    expect(snapshotFilter.env).toMatchObject({
+      DSH_EXAMPLE_MODE: 'lib',
+      DSH_SNAPSHOT_NAME_PATTERN: '^(?!.*pwsh-tool-turn)',
+    })
+    expect(snapshotFilter.run).toContain('--testNamePattern "$DSH_SNAPSHOT_NAME_PATTERN"')
+    const hostedPwshSkip = new RegExp(snapshotFilter.env.DSH_SNAPSHOT_NAME_PATTERN)
+    expect(hostedPwshSkip.test(
+      'headless recorded-session snapshots replays persistent-pwsh-tool-turn through dsh --profile headless',
+    )).toBe(false)
+    expect(hostedPwshSkip.test(
+      'headless recorded-session snapshots replays pwsh-tool-turn through dsh --profile headless',
+    )).toBe(false)
+    expect(hostedPwshSkip.test(
+      'headless recorded-session snapshots replays bash-tool-turn through dsh --profile headless',
+    )).toBe(true)
+    expect(JSON.stringify(snapshots.steps)).toContain('actions/cache/restore@')
     expect(JSON.stringify(snapshots.steps)).not.toContain('pnpm run check:ci:snapshot')
 
     const artifactCommands = runSteps(artifacts)
@@ -489,6 +511,9 @@ describe('Fork CI workflow', () => {
       with: {
         targets: 'node24-linux-x64',
         ci: true,
+      },
+      secrets: {
+        DEEPSEEK_API_KEY_EXTERNAL: '${{ secrets.DEEPSEEK_API_KEY_EXTERNAL }}',
       },
     })
 

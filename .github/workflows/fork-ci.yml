@@ -19,17 +19,21 @@ name: Fork CI
 #     typecheck or lint. Client tsc resolves generated Typert remotes, so the
 #     Host contract build must run first (upstream does that on the consumer
 #     lane via typertContractsGate()).
-#   - snapshots: prepare-ci-bubblewrap.sh, then official `pnpm run build`
-#     (DSH_BUILD_CLIENT_PROFILE=official) then DSH_EXAMPLE_MODE=lib
-#     test:snapshot with `-t '^(?!.*persistent-pwsh-tool-turn)'` — the same
-#     snapshotGate() the consumer lane uses, minus the hosted persistent PTY
-#     run. Lib-mode Web and sandbox-policy session events need a usable
+#   - snapshots: prepare-ci-bubblewrap.sh, Playwright Chromium (lib-mode
+#     test:snapshot includes apps/web/tests/**/*.snapshot.ts), then official
+#     `pnpm run build` (DSH_BUILD_CLIENT_PROFILE=official) then
+#     DSH_EXAMPLE_MODE=lib test:snapshot with --testNamePattern from
+#     DSH_SNAPSHOT_NAME_PATTERN ('^(?!.*pwsh-tool-turn)') — the same
+#     snapshotGate() the consumer lane uses, minus both hosted pwsh headless
+#     runs. The pattern is an env value so the YAML run script cannot expand
+#     `!`. Lib-mode Web and sandbox-policy session events need a usable
 #     bubblewrap backend on hosted Ubuntu; GITHUB_PATH from the prepare script
 #     applies to later steps. DSH_SNAPSHOT_MAX_CONCURRENCY=1 so the SSE
 #     keep-alive comment test is not starved. The persistent PTY returns
-#     shell-init scrollback on GitHub-hosted images; fixture guards still run.
-#     The skip lives in this file only so merging master does not conflict on
-#     snapshot.yml or session-snapshot.
+#     shell-init scrollback; one-shot pwsh-tool-turn emits permission/preset
+#     pin events the committed fixture does not contain. Fixture guards still
+#     run. The skip lives in this file only so merging master does not
+#     conflict on snapshot.yml or session-snapshot.
 #   - check:ci:artifacts, then duplication, built-output doc typecheck, and
 #     Playwright web snapshots: the consumer-lane artifact checks that
 #     snapshots omit (publint, built-package invariants, verify-node-next-types,
@@ -41,7 +45,10 @@ name: Fork CI
 #   - node-compat matrix (22.19, 24, and 26): the hosted 22.19/26 smokes plus
 #     the Node 24 check:node-compat the disabled consumer lane ran.
 #   - python-sdk and python-runtime: the hosted Python SDK suite and the
-#     release-shaped Linux x64 runtime builder.
+#     release-shaped Linux x64 runtime builder. python-runtime maps
+#     DEEPSEEK_API_KEY_EXTERNAL into the reusable workflow (callers must pass
+#     named secrets). Pull-request events skip the live-API preflight because
+#     this GitHub fork sets head.repo.fork; a push to dev/compat runs it.
 #   - wine Windows gate: the same hosted `windows` lane ci.yml runs on
 #     ubuntu-latest (workspace build + production site under win-x64 Node).
 # The full `pnpm run test` / check:ci:coverage unit suite is NOT gated here:
@@ -144,6 +151,13 @@ jobs:
           node-version: ${{ env.PRIMARY_NODE_VERSION }}
           cache: pnpm
 
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
       - name: Install (immutable)
         run: pnpm install --frozen-lockfile
 
@@ -155,20 +169,30 @@ jobs:
       - name: Prepare bubblewrap
         run: bash scripts/prepare-ci-bubblewrap.sh
 
+      # Lib-mode test:snapshot includes apps/web/tests/**/*.snapshot.ts.
+      # Those files launch Chromium; the artifacts job already installs it
+      # for test:web:ci, and this job must as well.
+      - name: Install Playwright Chromium
+        run: pnpm --filter @deepseek-ai/dsh-web-frontend exec playwright install --with-deps chromium
+
       # Same graph as snapshotGate() (official build, then lib-mode
-      # test:snapshot), minus the persistent-pwsh-tool-turn run. Hosted
-      # persistent PTYs return shell-init scrollback, not PWSH_OK.
-      # snapshot.yml rejects unknown skip fields; this vitest filter is
-      # fork-only so merging master does not re-conflict.
+      # test:snapshot), minus both hosted pwsh headless runs. Hosted
+      # persistent PTYs return shell-init scrollback, not PWSH_OK. One-shot
+      # pwsh-tool-turn pins permission/preset events the committed fixture
+      # does not contain. snapshot.yml rejects unknown skip fields; this
+      # vitest filter is fork-only so merging master does not re-conflict.
+      # The pattern lives in env: a YAML `run` string with `?!` lets bash
+      # expand `$?` when quotes are lost, which drops the filter.
       - name: Official build for snapshots
         env:
           DSH_BUILD_CLIENT_PROFILE: official
         run: pnpm run build
 
-      - name: Run snapshot aggregate except hosted persistent pwsh PTY
+      - name: Run snapshot aggregate except hosted pwsh scenarios
         env:
           DSH_EXAMPLE_MODE: lib
-        run: "pnpm run test:snapshot -- -t '^(?!.*persistent-pwsh-tool-turn)'"
+          DSH_SNAPSHOT_NAME_PATTERN: '^(?!.*pwsh-tool-turn)'
+        run: pnpm run test:snapshot -- --testNamePattern "$DSH_SNAPSHOT_NAME_PATTERN"
 
   artifacts:
     name: node 24 / artifacts and web snapshots
@@ -309,6 +333,8 @@ jobs:
     with:
       targets: node24-linux-x64
       ci: true
+    secrets:
+      DEEPSEEK_API_KEY_EXTERNAL: ${{ secrets.DEEPSEEK_API_KEY_EXTERNAL }}
 
   windows:
     name: windows node 24 / wine blocking
