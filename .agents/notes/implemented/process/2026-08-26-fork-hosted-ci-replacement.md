@@ -14,7 +14,7 @@ Editing `ci.yml` to retarget those private-runner jobs onto `ubuntu-latest` woul
 
 ## Decision
 
-[`.github/workflows/fork-ci.yml`](../../../../.github/workflows/fork-ci.yml) is the required pull-request and `dev/compat` push gate on `onlyfeng/deepseek-harness`. The file does not exist upstream, so merging `master` does not conflict with it. Operators disable the upstream `CI` and `CI master` workflows on this fork; both bind jobs to private runner labels this fork cannot allocate. The workflow files themselves stay unmodified.
+[`.github/workflows/fork-ci.yml`](../../../../.github/workflows/fork-ci.yml) is the required pull-request and `dev/compat` push gate on `onlyfeng/deepseek-harness`. The file does not exist upstream, so merging `master` does not conflict with it. Operators disable the upstream `CI`, `CI master`, and `Build PR preview` workflows on this fork. `CI` and `CI master` bind jobs to private runner labels this fork cannot allocate. [`Build PR preview`](../../../../.github/workflows/build-preview-cloudflare.yml) binds the same `dsh-ubuntu-24-04-16core` label and needs Cloudflare Pages / Access secrets this fork does not store. The workflow files themselves stay unmodified.
 
 `fork checks passed` depends on every job this workflow can run on standard hosted runners:
 
@@ -33,6 +33,8 @@ Each job is guarded with `github.repository == 'onlyfeng/deepseek-harness'` so a
 ## Alternatives considered
 
 **Retarget `ci.yml` private-runner jobs onto `ubuntu-latest`.** This restores the upstream workflow as the gate, but `ci.yml` changes frequently upstream and every sync would conflict on the `runs-on` expressions.
+
+**Add a repository `if` on [`build-preview-cloudflare.yml`](../../../../.github/workflows/build-preview-cloudflare.yml), or retarget that job to `ubuntu-latest`.** Either edit is an upstream-file overlay that re-conflicts on every sync. This fork cannot allocate `dsh-ubuntu-24-04-16core` and does not store the Cloudflare Pages / Access secrets the job needs, so a hosted retarget would fail closed rather than publish a preview. Disabling the workflow in the Actions tab matches `CI` and `CI master`.
 
 **Keep only build, typecheck, and lint in the replacement.** That leaves Cordis-config, package-invariant, documentation, catalog, and module-graph failures able to merge, and it treats typecheck plus lint as equivalent to `check:ci:static`, which they are not.
 
@@ -66,4 +68,4 @@ Each job is guarded with `github.repository == 'onlyfeng/deepseek-harness'` so a
 
 ## Consequences
 
-Pull requests and `dev/compat` pushes on this fork wait for `fork checks passed` instead of the upstream `all checks passed` aggregate. The replacement covers every hosted upstream job plus the static, snapshot, artifact, and Playwright web-snapshot aggregates that private runners previously owned. Exhaustive unit coverage, native Windows, and both hosted pwsh headless scenarios remain local or upstream-private-runner evidence; a regression confined to those suites can still merge here. Operators who need a green `dev/compat` push must store a non-empty `DEEPSEEK_API_KEY_EXTERNAL`; pull-request `python-runtime` already skips that live-API preflight on this fork.
+Pull requests and `dev/compat` pushes on this fork wait for `fork checks passed` instead of the upstream `all checks passed` aggregate. The replacement covers every hosted upstream job plus the static, snapshot, artifact, and Playwright web-snapshot aggregates that private runners previously owned. Exhaustive unit coverage, native Windows, both hosted pwsh headless scenarios, and Cloudflare Pages preview remain local or upstream-private-runner evidence; a regression confined to those suites can still merge here. Operators who need a green `dev/compat` push must store a non-empty `DEEPSEEK_API_KEY_EXTERNAL`; pull-request `python-runtime` already skips that live-API preflight on this fork. Disabling `Build PR preview` does not cancel a run already queued for a missing runner; cancel that run in the Actions UI.

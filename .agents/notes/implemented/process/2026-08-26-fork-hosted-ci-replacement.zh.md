@@ -14,7 +14,7 @@ Status: implemented
 
 ## 决策
 
-[`.github/workflows/fork-ci.yml`](../../../../.github/workflows/fork-ci.yml) 是 `onlyfeng/deepseek-harness` 上拉取请求与 `dev/compat` 推送的必需门禁。该文件在上游不存在，因此合并 `master` 不会与它冲突。操作者在本 fork 上禁用上游 `CI` 和 `CI master` 工作流；二者都把作业绑到本 fork 无法分配的私有 runner 标签。这些工作流文件本身保持未修改。
+[`.github/workflows/fork-ci.yml`](../../../../.github/workflows/fork-ci.yml) 是 `onlyfeng/deepseek-harness` 上拉取请求与 `dev/compat` 推送的必需门禁。该文件在上游不存在，因此合并 `master` 不会与它冲突。操作者在本 fork 上禁用上游 `CI`、`CI master` 和 `Build PR preview` 工作流。`CI` 与 `CI master` 把作业绑到本 fork 无法分配的私有 runner 标签。[`Build PR preview`](../../../../.github/workflows/build-preview-cloudflare.yml) 使用同一 `dsh-ubuntu-24-04-16core` 标签，并且需要本 fork 未存储的 Cloudflare Pages / Access secret。这些工作流文件本身保持未修改。
 
 `fork checks passed` 依赖本工作流能在标准托管 runner 上运行的每一项作业：
 
@@ -33,6 +33,8 @@ Status: implemented
 ## 曾考虑的替代方案
 
 **把 `ci.yml` 的私有 runner 作业改到 `ubuntu-latest`。** 这会让上游工作流重新成为门禁，但 `ci.yml` 在上游变动频繁，每次同步都会在 `runs-on` 表达式上冲突。
+
+**给 [`build-preview-cloudflare.yml`](../../../../.github/workflows/build-preview-cloudflare.yml) 加仓库 `if`，或把它改到 `ubuntu-latest`。** 两种改法都是上游文件覆盖层，每次同步都会冲突。本 fork 无法分配 `dsh-ubuntu-24-04-16core`，也未存储该作业需要的 Cloudflare Pages / Access secret，因此改到托管 runner 会以失败结束，而不会发布预览。在 Actions 选项卡中禁用该工作流，与 `CI` 和 `CI master` 一致。
 
 **在替代方案中只保留 build、typecheck 和 lint。** 这会让 Cordis 配置、package invariant、文档、catalog 和 module-graph 失败仍能合并，并把 typecheck 加 lint 当成与 `check:ci:static` 等价，而它们并不等价。
 
@@ -66,4 +68,4 @@ Status: implemented
 
 ## 后果
 
-本 fork 上的拉取请求与 `dev/compat` 推送等待 `fork checks passed`，而不是上游的 `all checks passed` 聚合。该替代方案覆盖每一项托管的上游作业，以及原先由私有 runner 拥有的静态、快照、产物与 Playwright Web 快照聚合。穷尽单元覆盖率、原生 Windows 以及两项托管 pwsh headless 场景仍是本地或上游私有 runner 上的证据；仅限于那些套件的回归在此仍可能合并。需要 `dev/compat` 推送变绿的操作者必须存入非空的 `DEEPSEEK_API_KEY_EXTERNAL`；本 fork 上的拉取请求 `python-runtime` 已经跳过该 live-API preflight。
+本 fork 上的拉取请求与 `dev/compat` 推送等待 `fork checks passed`，而不是上游的 `all checks passed` 聚合。该替代方案覆盖每一项托管的上游作业，以及原先由私有 runner 拥有的静态、快照、产物与 Playwright Web 快照聚合。穷尽单元覆盖率、原生 Windows、两项托管 pwsh headless 场景以及 Cloudflare Pages 预览仍是本地或上游私有 runner 上的证据；仅限于那些套件的回归在此仍可能合并。需要 `dev/compat` 推送变绿的操作者必须存入非空的 `DEEPSEEK_API_KEY_EXTERNAL`；本 fork 上的拉取请求 `python-runtime` 已经跳过该 live-API preflight。禁用 `Build PR preview` 不会取消已经在为缺失 runner 排队的运行；在 Actions 界面取消该运行。

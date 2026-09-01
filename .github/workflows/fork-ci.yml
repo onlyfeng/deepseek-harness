@@ -8,8 +8,10 @@ name: Fork CI
 # and its `all checks passed` aggregate never settles. The upstream `CI`
 # workflow is therefore disabled on this fork (Actions tab -> CI -> Disable
 # workflow) and this workflow gates the fork's changes on hosted runners
-# instead. This file does not exist upstream, so syncing upstream never
-# conflicts with it.
+# instead. Operators also disable `CI master` and `Build PR preview` (the
+# latter binds the same private Ubuntu label and needs Cloudflare secrets).
+# Those workflow files stay unmodified. This file does not exist upstream, so
+# syncing upstream never conflicts with it.
 #
 # Coverage relative to the disabled upstream CI:
 #   - check:ci:static (with archive base-ref), then build:lib:host, then
