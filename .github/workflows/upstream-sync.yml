@@ -7,16 +7,20 @@ name: Upstream Sync
 #
 # Scheduled runs only fire from the repository's default branch, so this file
 # must live on the default branch (set it to dev/compat) for the cron to
-# trigger; workflow_dispatch works from any branch that has this file.
+# trigger. workflow_dispatch "Use workflow from" must also be `dev/compat`:
+# this file is absent from the upstream-identical `master`. That picker
+# selects which YAML revision to run, not which branch to fast-forward.
 #
-# `github.token` cannot create or update `.github/workflows/*`. Checkout, the
-# mirror push, and `gh pr create` therefore authenticate with repository secret
+# `github.token` cannot create or update `.github/workflows/*`. Checkout and
+# the mirror push therefore authenticate with repository secret
 # `UPSTREAM_SYNC_TOKEN` (a fine-grained PAT with Contents, Pull requests, and
 # Workflows read/write, or a classic PAT with `repo` and `workflow`). Do not
 # store a GitHub App installation token: those expire in one hour, so a static
-# secret cannot survive the daily cron. A token-authenticated push to `master`
-# fires this fork's still-enabled `on: push` workflows; operators disable
-# upstream `CI` and `CI master` so private-runner jobs do not queue. Rationale:
+# secret cannot survive the daily cron. `gh pr create` tries that PAT first,
+# then `github.token` (this workflow already has `pull-requests: write`). A
+# token-authenticated push to `master` fires this fork's still-enabled
+# `on: push` workflows; operators disable upstream `CI` and `CI master` so
+# private-runner jobs do not queue. Rationale:
 # .agents/notes/implemented/process/2026-08-26-fork-upstream-sync.md
 
 on:
@@ -89,6 +93,8 @@ jobs:
           fi
 
       - name: Open or refresh integration PR (master -> dev/compat)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           behind="$(git rev-list --count "origin/$INTEGRATION_BRANCH..upstream/$UPSTREAM_BRANCH")"
           if [ "$behind" -eq 0 ]; then
@@ -98,10 +104,18 @@ jobs:
           existing="$(gh pr list --base "$INTEGRATION_BRANCH" --head "$MIRROR_BRANCH" --state open --json number --jq '.[0].number // empty')"
           if [ -n "$existing" ]; then
             echo "Integration PR #$existing is open and tracks $MIRROR_BRANCH automatically ($behind commit(s) ahead)."
-          else
-            gh pr create \
-              --base "$INTEGRATION_BRANCH" \
-              --head "$MIRROR_BRANCH" \
-              --title "chore: 集成上游更新 (${MIRROR_BRANCH} → ${INTEGRATION_BRANCH})" \
-              --body "自动创建:上游 \`${UPSTREAM_BRANCH}\` 有 ${behind} 个 \`${INTEGRATION_BRANCH}\` 尚未包含的提交。请审核并解决可能的冲突后合并。"
+            exit 0
           fi
+          title="chore: 集成上游更新 (${MIRROR_BRANCH} → ${INTEGRATION_BRANCH})"
+          body="自动创建:上游 \`${UPSTREAM_BRANCH}\` 有 ${behind} 个 \`${INTEGRATION_BRANCH}\` 尚未包含的提交。请审核并解决可能的冲突后合并。"
+          if gh pr create --base "$INTEGRATION_BRANCH" --head "$MIRROR_BRANCH" --title "$title" --body "$body"; then
+            exit 0
+          fi
+          # PAT Contents+Workflows can push workflow files but still lack
+          # createPullRequest. github.token can create a same-repo PR when
+          # Settings → Actions → General allows it.
+          if GH_TOKEN="${GITHUB_TOKEN}" gh pr create --base "$INTEGRATION_BRANCH" --head "$MIRROR_BRANCH" --title "$title" --body "$body"; then
+            exit 0
+          fi
+          echo "::error::Could not create the ${MIRROR_BRANCH} → ${INTEGRATION_BRANCH} integration PR (createPullRequest). Edit the existing UPSTREAM_SYNC_TOKEN fine-grained PAT and set Pull requests to Read and write (the token string stays valid; do not create a new secret). Alternatively enable Settings → Actions → General → Allow GitHub Actions to create and approve pull requests so github.token can create the PR."
+          exit 1
