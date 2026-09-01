@@ -16,7 +16,7 @@ Status: implemented
 
 [`.github/workflows/upstream-sync.yml`](../../../../.github/workflows/upstream-sync.yml) 放在 `dev/compat` 上，以便默认分支的 cron 能触发；它不出现在与上游一致的 `master` 上。作业仅在 `github.repository == 'onlyfeng/deepseek-harness'` 时运行。
 
-当 `origin/master` 是 `upstream/master` 的祖先时，将其快进到该提交；若不是，作业失败且不强推。当 `dev/compat` 尚未包含 `upstream/master` 时，作业打开或复用 `master` → `dev/compat` 的拉取请求，供人工解决冲突后合并。
+当 `origin/master` 是 `upstream/master` 的祖先时，将其快进到该提交；若不是，作业失败且不强推。当 `dev/compat` 尚未包含 `upstream/master` 时，作业打开或复用 `master` → `dev/compat` 的拉取请求。GitHub 的冲突解决界面以及向该 PR head 的任何推送都会把提交写到 `master` 上，从而破坏只快进镜像。应在从 `dev/compat` 拉出的分支上合并 `origin/master` 来解决冲突，再向 `dev/compat` 开 PR，并关闭同步 PR。
 
 checkout 和镜像推送使用仓库密钥 `UPSTREAM_SYNC_TOKEN` 鉴权。可接受的值是：Contents、Pull requests 与 Workflows 均为 Read and write 的细粒度个人访问令牌（PAT），或带 `repo` 与 `workflow` 的 classic PAT。GitHub App 安装令牌不是可接受值：它们一小时后过期，不能作为这个静态密钥。密钥为空时在 fetch 之前失败，错误信息会写出密钥名和所需权限。集成 PR 通过 REST `POST /repos/{owner}/{repo}/pulls` 用该 PAT 创建；若 PAT 的 POST 失败，再改用 `github.token`。手动 `workflow_dispatch` 必须从 `dev/compat` 选用工作流；本文件不在 `master` 上，该下拉框也不选择要快进的镜像分支。
 
@@ -36,11 +36,13 @@ checkout 和镜像推送使用仓库密钥 `UPSTREAM_SYNC_TOKEN` 鉴权。可接
 
 **用 `gh pr create` 开集成 PR。** 该命令调用 GraphQL `createPullRequest`。细粒度 PAT 即使能成功调用 REST `POST /repos/{owner}/{repo}/pulls`，仍会得到 `Resource not accessible by personal access token (createPullRequest)`。
 
+**在 GitHub 界面解决同步 PR 的冲突，或把合并提交推到 `master`。** 二者都会把 fork 专有历史写进镜像。下一次定时快进随后会失败，因为 `origin/master` 不再是 `upstream/master` 的祖先。
+
 **取消定时，只从人工 clone 同步。** 这放弃无人值守追齐；一旦存好密钥，`workflow_dispatch` 仍可用。
 
 ## 后果
 
-在操作者存入 `UPSTREAM_SYNC_TOKEN` 并禁用 `CI master` 之前，定时 Upstream Sync 以失败告终。用令牌向 `master` 的推送会触发其他仍启用的 `on: push` 工作流（托管 pack、e2e、sandbox）；这些由操作者禁用，或允许在托管 runner 上运行，而不是去改镜像中的文件。用 PAT 打开的集成 PR 作者是令牌所有者，而不是 `github-actions[bot]`。`github.token` 的 REST 回退需要在 Settings → Actions → General 中勾选 Allow GitHub Actions to create and approve pull requests。将该 PR 合并进 `dev/compat` 仍是人工步骤：作业不解决冲突，也不绕过 [fork 托管 CI](2026-08-26-fork-hosted-ci-replacement.zh.md)。
+在操作者存入 `UPSTREAM_SYNC_TOKEN` 并禁用 `CI master` 之前，定时 Upstream Sync 以失败告终。用令牌向 `master` 的推送会触发其他仍启用的 `on: push` 工作流（托管 pack、e2e、sandbox）；这些由操作者禁用，或允许在托管 runner 上运行，而不是去改镜像中的文件。用 PAT 打开的集成 PR 作者是令牌所有者，而不是 `github-actions[bot]`。`github.token` 的 REST 回退需要在 Settings → Actions → General 中勾选 Allow GitHub Actions to create and approve pull requests。合并有冲突的 `master` → `dev/compat` PR 仍是在 `dev/compat` 分支上的人工步骤：作业不解决冲突、不往 `master` 提交，也不绕过 [fork 托管 CI](2026-08-26-fork-hosted-ci-replacement.zh.md)。
 
 ## 测试
 
