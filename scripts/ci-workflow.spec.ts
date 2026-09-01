@@ -431,7 +431,7 @@ describe('Fork CI workflow', () => {
     expect(bubblewrap).toBeGreaterThanOrEqual(0)
     expect(officialBuild).toBeGreaterThan(bubblewrap)
     expect(snapshotGate).toBeGreaterThan(officialBuild)
-    expect(snapshotRuns[snapshotGate]).toContain("!persistent-pwsh-tool-turn")
+    expect(snapshotRuns[snapshotGate]).toContain('^(?!.*persistent-pwsh-tool-turn)')
     expect(JSON.stringify(snapshots.steps)).not.toContain('pnpm run check:ci:snapshot')
 
     const artifactCommands = runSteps(artifacts)

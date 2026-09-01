@@ -21,7 +21,7 @@ name: Fork CI
 #     lane via typertContractsGate()).
 #   - snapshots: prepare-ci-bubblewrap.sh, then official `pnpm run build`
 #     (DSH_BUILD_CLIENT_PROFILE=official) then DSH_EXAMPLE_MODE=lib
-#     test:snapshot with `-t '!persistent-pwsh-tool-turn'` — the same
+#     test:snapshot with `-t '^(?!.*persistent-pwsh-tool-turn)'` — the same
 #     snapshotGate() the consumer lane uses, minus the hosted persistent PTY
 #     run. Lib-mode Web and sandbox-policy session events need a usable
 #     bubblewrap backend on hosted Ubuntu; GITHUB_PATH from the prepare script
@@ -168,7 +168,7 @@ jobs:
       - name: Run snapshot aggregate except hosted persistent pwsh PTY
         env:
           DSH_EXAMPLE_MODE: lib
-        run: "pnpm run test:snapshot -- -t '!persistent-pwsh-tool-turn'"
+        run: "pnpm run test:snapshot -- -t '^(?!.*persistent-pwsh-tool-turn)'"
 
   artifacts:
     name: node 24 / artifacts and web snapshots
