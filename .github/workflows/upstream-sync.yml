@@ -3,7 +3,9 @@ name: Upstream Sync
 # Keeps the `master` mirror fast-forwarded to upstream
 # (deepseek-ai/deepseek-harness) and opens an integration PR into the fork's
 # working branch `dev/compat` when upstream introduces new commits. A human
-# reviews and resolves conflicts before merging into dev/compat.
+# reviews and resolves conflicts before merging into dev/compat. Do not
+# resolve that PR in the GitHub UI: that commits onto `master`. Merge
+# `origin/master` into a branch from `dev/compat` instead.
 #
 # Scheduled runs only fire from the repository's default branch, so this file
 # must live on the default branch (set it to dev/compat) for the cron to

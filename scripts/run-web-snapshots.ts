@@ -5,7 +5,7 @@ import { pnpmInvocation } from './pnpm-invocation.ts'
 const serialFiles = [
   // Hashes official `apps/web/dist` and `lib/client.js`. `hmr-live` starts
   // `dev:web`, which rewrites those trees, so the digest must run first.
-  'apps/web/tests/built-boot.snapshot.ts',
+  'apps/web/tests/built-boot.expected.e2e.ts',
   'apps/web/tests/hmr-live.e2e.ts',
   'apps/web/tests/cordis-tool-round.e2e.ts',
 ]
