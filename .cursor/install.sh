@@ -22,7 +22,8 @@ nvm use 24
 # --- pnpm -----------------------------------------------------------------
 # pnpm is pinned by package.json "packageManager"; provide it via corepack.
 corepack enable
-corepack prepare pnpm@11.7.0 --activate
+pnpm_version="$(node -e "const manager=require('./package.json').packageManager; if(!manager.startsWith('pnpm@')) throw new Error(manager); process.stdout.write(manager.slice('pnpm@'.length))")"
+corepack prepare "pnpm@${pnpm_version}" --activate
 
 # `pnpm run`/`pnpm exec` default to re-running `pnpm install` whenever
 # node_modules looks stale (verifyDepsBeforeRun=install). That re-runs the root

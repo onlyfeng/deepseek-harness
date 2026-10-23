@@ -84,7 +84,6 @@ Opening the database creates the parent as `0o700`, exclusively creates a missin
 | [`src/index.ts`](src/index.ts) | Plugin entry: backend registration, `path`/`journalMode` config, unit table |
 | [`src/schema.ts`](src/schema.ts) | Open sequence, physical layout version, metadata tables, record table naming |
 | [`src/unit.ts`](src/unit.ts) | One opened unit: prepared statements, JSON value parse, close |
-| [`src/invariant.ts`](src/invariant.ts) | Invariant companion (no runtime invariant: versions are open-time checks) |
 
 </details>
 

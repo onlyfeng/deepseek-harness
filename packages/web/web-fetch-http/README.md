@@ -92,7 +92,6 @@ The package is built on one separation and one layered timeout:
 | [`src/provider.ts`](src/provider.ts) | The `HttpFetchProvider`: pinned transport, redirect following, capped reads, charset decoding |
 | [`src/network.ts`](src/network.ts) | Public-address resolution, DNS64 discovery, and connection pinning |
 | [`src/policy.ts`](src/policy.ts) | URL validation, same-origin checks, content-type classification, charset parsing |
-| [`src/invariant.ts`](src/invariant.ts) | Invariant companion (no runtime invariant; limits are enforced in the provider) |
 
 ### Read path
 

@@ -27,10 +27,7 @@
       "path": "../../client/ui-slots"
     },
     {
-      "path": "../../client/ui-theme"
-    },
-    {
-      "path": "../../runtime-diagnostics/invariants"
+      "path": "../../client/ui-theme/tsconfig.client.json"
     }
   ]
 }

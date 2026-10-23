@@ -24,7 +24,7 @@ Status: implemented
 - `node-compat` 在 Node 22.19、Node 24 与 Node 26 上运行 `check:node-compat`。22.19 与 26 复现上游托管矩阵。Node 24 覆盖被禁用的 consumer 通道里 `ciConsumerGates()` 运行的 source-worker、Zstandard、source-launch 和 jsdom 冒烟；`check:ci:artifacts` 与 `check:ci:snapshot` 并不包含它们。
 - `python-sdk` 运行无密钥的 Python 3.10 SDK 套件。
 - `python-runtime` 以 `ci: true` 调用共享的[单文件可执行文件构建器](../../../../.github/workflows/build-exe-for-python-sdk.yml) 构建 `node24-linux-x64`，并映射 `secrets.DEEPSEEK_API_KEY_EXTERNAL`，与[必需的 Python runtime 作业](../../archived/testing/2026-08-12-required-python-runtime-pull-request-ci.md)一致。可复用工作流只有在调用方传入时才会收到具名 secret。拉取请求事件会跳过已安装 wheel 的 live-API preflight，因为本 GitHub fork 会设置 `head.repo.fork`；向 `dev/compat` 的推送会运行该 preflight，并在 secret 为空时失败。
-- `windows` 在 `ubuntu-latest` 上运行 `scripts/wine-windows-gates.sh`，与[可移植拉取请求 CI 记录](2026-07-23-portable-required-pull-request-ci.zh.md)中的阻塞式 Wine 通道一致。
+- `windows` 在 `ubuntu-latest` 上运行 `scripts/wine-windows-gates.sh`，与[可移植拉取请求 CI 记录](../../archived/process/2026-07-23-portable-required-pull-request-ci.md)中的阻塞式 Wine 通道一致。
 
 本工作流不运行 `check:ci:coverage` 或 `pnpm run test`。这些套件包含 `packages/terminal` 与 `packages/shell` 集成测试，它们依赖调校过的 PTY / PowerShell runner，并在 GitHub 托管镜像上失败；仓库的 Vitest `projects` 配置也无法在不编辑上游 Vitest 配置的情况下用 CLI 排除它们。`windows-native` 仍然省略，因为它仍需要本 fork 没有的私有 Windows runner。
 
