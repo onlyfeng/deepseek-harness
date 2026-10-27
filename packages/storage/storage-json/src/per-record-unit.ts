@@ -2,28 +2,32 @@
  * One opened JSON unit in `per-record` layout: the unit is a directory at
  * `dir`, holding one document per record under `<dir>/<table>/<key>.json`
  * plus `global.json` for the global slot. The directory is the state — this
- * unit holds NO in-memory state of its own: `loadAll` re-reads the tree and
- * every write is one durable file operation. The domain layer owns the live
+ * unit holds NO in-memory state of its own: `loadAll` re-reads the tree, each
+ * put or delete touches one durable document, and a batch delete renames its
+ * documents out of the readable set before unlinking them. The domain layer owns the live
  * in-memory tables (seeded by the open-time `loadAll`) and serializes writes
  * through its write chain, so this unit never mutates memory and needs no
  * rollback — a failed write simply leaves both the file and the domain's
  * memory unchanged.
  *
  * Per-record contract: a record document that is malformed or stamped with a
- * different version reads as an absent record — one bad or stale file never
- * bricks the whole unit, and a version bump discards stale records instead
- * of migrating them. Record keys become path segments, so they must be
- * path-safe (`[a-zA-Z0-9_-]+`); an unsafe key rejects at write.
+ * version outside the accepted set (the descriptor's current version plus
+ * its `compatibleVersions`) reads as an absent record — one bad or stale
+ * file never bricks the whole unit, and an unaccepted version stamp discards
+ * the record instead of migrating it. Record keys become path segments, so
+ * they must be path-safe (`[a-zA-Z0-9_-]+`); an unsafe key rejects at write.
  *
  * Legacy bootstrap: when the new tree has no document path, a legacy
  * whole-unit file `<root>/<name>.json` (the pre-per-record layout) seeds
- * per-record documents. Any new document path, including one whose contents
- * are unreadable or stale, suppresses the bootstrap for the whole unit. The
+ * per-record documents, provided its stored unit version is in the accepted
+ * set — a legacy file stamped with any other version is left alone and reads
+ * as the empty unit. Any new document path, including one whose contents are
+ * unreadable or stale, suppresses the bootstrap for the whole unit. The
  * legacy file is never changed or deleted.
  * @module @deepseek-ai/dsh-storage-json/src/per-record-unit
  */
 
-import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Dirent } from 'node:fs'
 import { StorageError } from '@deepseek-ai/dsh-storage'
@@ -57,13 +61,14 @@ export async function openPerRecordUnit(
  * Read every record document under the unit directory: each declared table's
  * `<key>.json` files plus `global.json`. A missing directory is the empty
  * unit (materialization defers to the first write); a foreign document
- * (missing, malformed, or stamped with another version) reads as an absent
+ * (missing, malformed, or stamped with an unaccepted version) reads as an absent
  * record, per the per-record contract.
  * @param descriptor - Static identity and shape of the unit.
  * @param dir - Absolute unit directory path.
  * @returns the authoritative state reconstructed from the tree.
  */
 async function loadPerRecordState(descriptor: KvUnitDescriptor, dir: string): Promise<UnitState> {
+  const versions = acceptedStamps(descriptor)
   const state: UnitState = {
     version: descriptor.version,
     global: null,
@@ -83,11 +88,11 @@ async function loadPerRecordState(descriptor: KvUnitDescriptor, dir: string): Pr
       if (entry.isDirectory()) {
         const records = state.tables.get(entry.name)
         if (records !== undefined) {
-          return loadTableRecords(records, descriptor.version, join(dir, entry.name))
+          return loadTableRecords(records, versions, join(dir, entry.name))
         }
       }
       if (entry.name === 'global.json' && descriptor.hasGlobal) {
-        const global = await readRecord(join(dir, entry.name), descriptor.version)
+        const global = await readRecord(join(dir, entry.name), versions)
         if (global !== undefined) state.global = global
         return true
       }
@@ -97,12 +102,21 @@ async function loadPerRecordState(descriptor: KvUnitDescriptor, dir: string): Pr
   return state
 }
 
+/** The version stamps this unit reads as its own: current plus declared compatible versions. */
+function acceptedStamps(descriptor: KvUnitDescriptor): readonly number[] {
+  return [descriptor.version, ...descriptor.compatibleVersions ?? []]
+}
+
 /**
  * Bootstrap an empty per-record tree from a legacy whole-unit file
  * (`<root>/<name>.json`, the pre-per-record layout). Every declared-table
  * record is copied into a current-version document, while the legacy file is
  * retained unchanged. A missing, foreign (another unit's name), malformed,
- * or non-unit legacy file is left alone; other read failures propagate.
+ * or non-unit legacy file is left alone, and so is one whose stored unit
+ * version is outside the accepted set — migrating records the owner never
+ * vouched for would stamp them with the current version and turn a
+ * discardable stale cache into schema failures at the domain layer. Other
+ * read failures propagate.
  * @param descriptor - Static identity and shape of the unit.
  * @param dir - The per-record unit directory (`<root>/<name>`).
  * @param state - The empty tree state; bootstrapped records are added.
@@ -116,16 +130,18 @@ async function bootstrapLegacyUnit(descriptor: KvUnitDescriptor, dir: string, st
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     return
   }
-  // The legacy document is runtime data: only `unit.name` and the tables map
-  // shape are checked here — the record values are migrated as-is and the
-  // domain layer's schemas judge them.
-  let document: { unit?: { name?: unknown }; tables?: unknown }
+  // The legacy document is runtime data: only `unit.name`, `unit.version`,
+  // and the tables map shape are checked here — the record values are
+  // migrated as-is and the domain layer's schemas judge them.
+  let document: { unit?: { name?: unknown; version?: unknown }; tables?: unknown }
   try {
-    document = JSON.parse(text) as { unit?: { name?: unknown }; tables?: unknown }
+    document = JSON.parse(text) as { unit?: { name?: unknown; version?: unknown }; tables?: unknown }
   } catch {
     return // Malformed legacy file: not ours to interpret or delete.
   }
   if (document.unit?.name !== descriptor.name) return
+  const stamped = document.unit.version
+  if (typeof stamped !== 'number' || !acceptedStamps(descriptor).includes(stamped)) return
   const tables = document.tables
   if (typeof tables !== 'object' || tables === null) return
   const recordsByTable = tables as Record<string, Record<string, unknown>>
@@ -146,14 +162,14 @@ async function bootstrapLegacyUnit(descriptor: KvUnitDescriptor, dir: string, st
  * @returns whether the directory contains any `.json` document path,
  * independently of key safety, readability, or stored version.
  */
-async function loadTableRecords(records: Map<string, unknown>, version: number, dir: string): Promise<boolean> {
+async function loadTableRecords(records: Map<string, unknown>, versions: readonly number[], dir: string): Promise<boolean> {
   const files = await readdir(dir, { withFileTypes: true })
   const hasDocuments = files.some(file => file.name.endsWith('.json'))
   const loaded = await Promise.all(files.map(async (file) => {
     if (!file.name.endsWith('.json')) return
     const key = file.name.slice(0, -'.json'.length)
     if (!SAFE_KEY_RE.test(key)) return
-    const record = await readRecord(join(dir, file.name), version)
+    const record = await readRecord(join(dir, file.name), versions)
     if (record !== undefined) return [key, record] as const
   }))
   for (const record of loaded) {
@@ -163,9 +179,9 @@ async function loadTableRecords(records: Map<string, unknown>, version: number, 
 }
 
 /** Read one record document; a foreign (unreadable or stale) one reads as absent. */
-async function readRecord(path: string, version: number): Promise<unknown> {
+async function readRecord(path: string, versions: readonly number[]): Promise<unknown> {
   try {
-    return parseRecord(await readFile(path, 'utf8'), version)
+    return parseRecord(await readFile(path, 'utf8'), versions)
   } catch {
     return undefined
   }
@@ -179,6 +195,8 @@ async function readRecord(path: string, version: number): Promise<unknown> {
  */
 export class PerRecordJsonUnit implements KvUnit {
   private closed = false
+  /** Set when a failed batch could not restore its staged documents. */
+  private unusable: StorageError | undefined
   /** In-flight durable writes; close() drains them before releasing the unit. */
   private readonly inFlight = new Set<Promise<void>>()
 
@@ -213,6 +231,84 @@ export class PerRecordJsonUnit implements KvUnit {
     await this.tracked(rm(join(this.tableDir(table), `${key}.json`), { force: true }))
   }
 
+  /**
+   * Durably delete many records as one batch. Documents are renamed out of the
+   * readable set first; only after the whole batch is staged are the staged
+   * copies unlinked. A failure while staging restores the documents it moved,
+   * so a rejection normally leaves the batch unapplied. If that restoration
+   * itself fails, the readable state is unknown: the unit rejects with
+   * `unknown-state` and every later operation on it rejects, while `close`
+   * still releases it. A staged document a crash leaves behind is not readable
+   * (`open` reads `*.json` documents only).
+   */
+  async deleteRecords(table: string, keys: readonly string[]): Promise<void> {
+    this.assertOpen()
+    const dir = this.tableDir(table)
+    const unique = [...new Set(keys)]
+    for (const key of unique) assertSafeKey(this.descriptor.name, key)
+    // One tracked promise covers staging, restoration, and cleanup, so close()
+    // cannot release the unit while any part of the batch is still running.
+    await this.tracked(this.removeDocuments(dir, unique))
+  }
+
+  /**
+   * Remove one batch's documents under a single tracked promise.
+   * @param dir - Declared table directory.
+   * @param keys - Validated, de-duplicated record keys.
+   */
+  private async removeDocuments(dir: string, keys: readonly string[]): Promise<void> {
+    const staged: Array<{ from: string; to: string }> = []
+    try {
+      for (const key of keys) {
+        const from = join(dir, `${key}.json`)
+        const to = `${from}.deleting`
+        try {
+          await rename(from, to)
+        } catch (error: unknown) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+          throw error
+        }
+        staged.push({ from, to })
+      }
+    } catch (error: unknown) {
+      const restoreFailures: unknown[] = []
+      for (const { from, to } of staged) {
+        try {
+          await rename(to, from)
+        } catch (restoreError: unknown) {
+          restoreFailures.push(restoreError)
+        }
+      }
+      if (restoreFailures.length === 0) throw error
+      this.unusable = new StorageError(
+        'unknown-state',
+        `unit '${this.descriptor.name}' could not restore ${restoreFailures.length} staged document(s)`
+        + ' after a failed batch delete; its readable state is unknown',
+        { cause: new AggregateError([error, ...restoreFailures], 'batch delete failed and restoration failed') },
+      )
+      throw this.unusable
+    }
+    // The renames already removed the batch from the readable set; unlinking is
+    // cleanup, and a failed unlink leaves an unreadable file rather than an entry.
+    await Promise.allSettled(staged.map(({ to }) => rm(to, { force: true })))
+  }
+
+  /**
+   * Move one record's document aside as `<key>.json.bak.<YYYYMMDDHHmm>`. The
+   * moved file no longer ends in `.json`, so every later read ignores it; the
+   * bytes stay on disk for inspection. A same-minute backup of the same
+   * key overwrites the previous backup (the newer bytes are the ones worth
+   * keeping).
+   */
+  async backupRecord(table: string, key: string): Promise<string> {
+    this.assertOpen()
+    assertSafeKey(this.descriptor.name, key)
+    const path = join(this.tableDir(table), `${key}.json`)
+    const moved = `${path}.bak.${backupStamp(new Date())}`
+    await this.tracked(rename(path, moved))
+    return moved
+  }
+
   /** Durably replace the global singleton. Only valid when declared. */
   async setGlobal(value: unknown): Promise<void> {
     this.assertOpen()
@@ -238,6 +334,7 @@ export class PerRecordJsonUnit implements KvUnit {
     if (this.closed) {
       throw new StorageError('closed', `unit '${this.descriptor.name}' is closed`)
     }
+    if (this.unusable !== undefined) throw this.unusable
   }
   /* jscpd:ignore-end */
 
@@ -265,6 +362,12 @@ export class PerRecordJsonUnit implements KvUnit {
     write.catch(() => {}).finally(() => this.inFlight.delete(write))
     return write
   }
+}
+
+/** Local-time `YYYYMMDDHHmm` suffix for backed-up documents. */
+function backupStamp(now: Date): string {
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${String(now.getFullYear())}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`
 }
 
 /** Reject a record key that would be unsafe as a path segment. */

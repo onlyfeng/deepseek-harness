@@ -50,8 +50,8 @@ name: Fork CI
 #     Lib-mode Web snapshots request workspace-write and refuse to run
 #     unconfined. Hosted ubuntu-latest has 4 CPUs, so
 #     DSH_WEB_SNAPSHOT_WORKERS=2 (upstream uses 6 on the 16-core pool).
-#   - node-compat matrix (22.19, 24, and 26): the hosted 22.19/26 smokes plus
-#     the Node 24 check:node-compat the disabled consumer lane ran.
+#   - node-compat matrix (24.9 and 26): the hosted upstream matrix. Node 24.9
+#     is the pinned floor and owns the build-backed CLI smoke.
 #   - python-sdk and python-runtime: the hosted Python SDK suite and the
 #     release-shaped Linux x64 runtime builder. python-runtime maps
 #     DEEPSEEK_API_KEY_EXTERNAL into the reusable workflow (callers must pass
@@ -106,7 +106,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v6
         with:
@@ -152,7 +152,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v6
         with:
@@ -222,7 +222,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v6
         with:
@@ -286,12 +286,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - node: '22.19'
-            name: node 22.19
-            runner: ubuntu-latest
-            gate_concurrency: '1'
-          - node: 24
-            name: node 24
+          - node: '24.9'
+            name: node 24.9
             runner: ubuntu-latest
             gate_concurrency: '1'
           - node: 26
@@ -305,7 +301,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v6
         with:
@@ -315,10 +311,16 @@ jobs:
       - name: Install (immutable)
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare bubblewrap (unrestrict userns)
+        run: bash scripts/prepare-ci-bubblewrap.sh
+
       - name: Run compatibility smokes
         env:
           DSH_BUILD_CLIENT_PROFILE: official
         run: pnpm run check:node-compat
+
+      - name: Check Loader internal shape detection
+        run: pnpm exec vitest run packages/boot/app-boot/tests/loader-shape.compat.spec.ts
 
   python-sdk:
     if: github.repository == 'onlyfeng/deepseek-harness'
@@ -363,7 +365,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v6
         with:

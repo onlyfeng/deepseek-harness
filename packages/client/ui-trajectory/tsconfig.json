@@ -12,13 +12,16 @@
       "path": "../../../vendor/cordis"
     },
     {
-      "path": "../locale"
+      "path": "../locale/tsconfig.client.json"
     },
     {
       "path": "../store"
     },
     {
-      "path": "../ui-conversation"
+      "path": "../ui-conversation/tsconfig.client.json"
+    },
+    {
+      "path": "../../util/values"
     },
     {
       "path": "../ui-renderer"
@@ -39,19 +42,16 @@
       "path": "../../core/session"
     },
     {
-      "path": "../../core/tools"
-    },
-    {
       "path": "../../compaction/compaction"
-    },
-    {
-      "path": "../../runtime-diagnostics/invariants"
     },
     {
       "path": "../../llm/llm"
     },
     {
       "path": "../../attachment/attachment"
+    },
+    {
+      "path": "../../core/tool-executor-ptc"
     }
   ]
 }

@@ -54,7 +54,7 @@ kind: "package-reference"
 
 ### 可观察行为
 
-缺失的目录与数据库文件会以仅所有者可访问的权限创建（`0o700`／`0o600`）；已有数据库保持其既有模式。已存格式版本与描述符不同的单元拒绝 `version-mismatch`，盖有非当前物理布局版本的数据库会直接拒绝——不做迁移，预发布立场。失败携带稳定的 `StorageError` 代码，写入 resolve 后即已持久。
+缺失的目录与数据库文件会以仅所有者可访问的权限创建（`0o700`／`0o600`）；已有数据库保持其既有模式。已存格式版本与描述符不同的单元拒绝 `version-mismatch`，盖有非当前物理布局版本的数据库会直接拒绝——不做迁移，预发布立场。失败携带稳定的 `StorageError` 代码（`version-mismatch`、`malformed-medium`、`unknown-state`、`closed`）；单记录写入与已提交批次一旦 resolve 即已持久。无法开启或回滚事务的批量删除以 `unknown-state` 拒绝，之后除 `close()` 外对该 unit 的所有操作都会拒绝；关闭后的调用以 `closed` 拒绝。
 
 -----
 
@@ -69,7 +69,7 @@ kind: "package-reference"
 ### 设计理念
 
 - **每行一份文档。** 每个单元表都变成一张物理 STRICT 表 `u_<unit>_<table> (key TEXT PRIMARY KEY, value TEXT)`，其 `value` 列保存记录的 JSON 文本；全局单例存放在共享的 `unit_globals` 表中。一个键的更新恰好触碰一行——这就是把高频变更领域路由到这里的原因。
-- **单语句原子性。** 每个写入原语都是一条预处理语句，因此 SQLite 的逐语句原子性无需显式事务即可满足 KV 约定；写入顺序仍由调用方负责（领域层的写入链）。
+- **语句原子性。** 每个单记录写入都是一条预处理语句；批量删除在一个显式事务中执行其删除，因此整批一起提交或回滚。无法开启或回滚事务的批量删除以 `unknown-state` 拒绝，之后除 `close()` 外对该 unit 的所有操作都会拒绝；写入顺序仍由调用方负责（领域层的写入链）。
 - **名称在 DDL 之前校验。** 单元名与表名在进入 DDL 之前必须匹配 `UNIT_NAME_RE`，因此任何外部输入都不会被插值进 SQL 标识符。
 - **版本明确报错。** 物理布局版本存放在 `PRAGMA user_version`（全新数据库最后盖戳）；单元格式版本存放在 `units` 表中。任何其他已标记值都会被拒绝——不做迁移。
 
@@ -84,7 +84,6 @@ kind: "package-reference"
 | [`src/index.ts`](src/index.ts) | 插件入口：后端注册、`path`／`journalMode` 配置、单元表 |
 | [`src/schema.ts`](src/schema.ts) | 打开顺序、物理布局版本、元数据表、记录表命名 |
 | [`src/unit.ts`](src/unit.ts) | 一个已打开单元：预处理语句、JSON 值解析、关闭 |
-| [`src/invariant.ts`](src/invariant.ts) | 不变式伴生插件（无运行时不变式：版本是打开时检查） |
 
 </details>
 
@@ -127,9 +126,9 @@ kind: "package-reference"
 这些限制说明本后端何时不合适，或何时需要特别的运维注意。它们是当前包约束，不是任务积压。
 
 - **同步驱动阻塞事件循环**——每次写入都是一次同步 `DatabaseSync` 调用；阻塞只持续一条语句，在领域数据规模下可以接受。
-- **没有忙等待或重试策略**——持有写锁的竞争连接会立即拒绝操作，而不是等待；领域层的写入链在单进程内串行化写入，跨进程协调属于范围外。
+- **没有忙等待或重试策略**——持有写锁的竞争连接会立即拒绝操作，而不是等待；领域层的写入链在单进程内串行化写入，跨进程协调不在范围内。
 - **只打开当前的物理布局版本**——任何其他已标记的 `user_version` 都会被拒绝而不是迁移（预发布立场）。
-- **打开顺序与 query provider 重复**——`openDatabase` 与 `session-query-sqlite` 都强制执行 SQLite 文件 ownership，但两个 package 分别拥有不同的 application identity 与 schema；没有共享 medium helper 将其耦合。
+- **打开顺序与查询提供方重复**——`openDatabase` 与 `session-query-sqlite` 都强制执行 SQLite 文件所有权约束，但两个包各自拥有不同的应用标识与 schema；没有共享介质辅助模块将二者耦合。
 
 <a id="dev-note"></a>
 ### 开发备注

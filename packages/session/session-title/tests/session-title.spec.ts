@@ -1,7 +1,9 @@
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
-import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
+import AgentRegistry from '@deepseek-ai/dsh-agent'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SessionTitleService, {
   SessionTitleProviderId,
@@ -10,6 +12,12 @@ import SessionTitleService, {
   normalizeSessionTitle,
   truncateTitleUtf8,
 } from '@deepseek-ai/dsh-session-title'
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'seed': { kind: 'seed' } & ContextFormed
+  }
+}
 
 const CONFIG = {
   fallbackMaxWords: 5,
@@ -41,6 +49,7 @@ describe('SessionTitleService', () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)
     await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(AgentRegistry)
     await ctx.plugin(SessionTitleService, CONFIG)
     const session = ctx.sessions.create(SessionId('fresh'))
     session.append('turn/start', {
@@ -53,7 +62,7 @@ describe('SessionTitleService', () => {
 
     await settleTitles()
 
-    const titleEvent = session.events.findLast(event => event.type === 'session/title')
+    const titleEvent = session.snapshotEvents().findLast(event => event.type === 'session/title')
     expect(titleEvent).toMatchObject({
       type: 'session/title',
       seq: 2,
@@ -78,6 +87,7 @@ describe('SessionTitleService', () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)
     await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(AgentRegistry)
     await ctx.plugin(SessionTitleService, CONFIG)
     const session = ctx.sessions.create(SessionId('prefixed-title'))
     session.append('user/message', createUserMessage({
@@ -106,6 +116,7 @@ describe('SessionTitleService', () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)
     await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(AgentRegistry)
     await ctx.plugin(SessionTitleService, CONFIG)
     const session = ctx.sessions.create(SessionId('eligibility'))
     session.append('turn/start', {
@@ -113,7 +124,7 @@ describe('SessionTitleService', () => {
     })
     session.append('user/message', createUserMessage({
       content: [{ type: 'text', text: 'plugin text' }],
-      source: { kind: 'plugin', plugin: 'seed' },
+      source: { kind: 'seed' },
     }), { surfaceOp: 'append' })
     session.append('user/message', createUserMessage({
       content: [{ type: 'reasoning', text: 'not visible text' }],
@@ -140,19 +151,19 @@ describe('SessionTitleService', () => {
 
     expect(first?.messageSeqs).toEqual([eligible.seq])
     expect(ctx.sessionTitle.get(session)).toEqual(first)
-    expect(session.events.filter(event => event.type === 'session/title')).toHaveLength(1)
+    expect(session.snapshotEvents().filter(event => event.type === 'session/title')).toHaveLength(1)
   })
 
   it('folds the latest title event during replay', () => {
     const seed = Session.create(SessionId('source'))
     seed.append('session/title', {
       title: 'Earlier',
-      messageSeqs: [1],
+      messageSeqs: [SessionSeq(1)],
       source: { kind: 'fallback' },
     })
     seed.append('session/title', {
       title: 'Later',
-      messageSeqs: [1, 4],
+      messageSeqs: [SessionSeq(1), SessionSeq(4)],
       source: {
         kind: 'provider',
         provider: SessionTitleProviderId('test-provider'),
@@ -160,7 +171,7 @@ describe('SessionTitleService', () => {
       },
     })
 
-    expect(foldSessionTitle(seed.events)).toEqual({
+    expect(foldSessionTitle(seed.snapshotEvents())).toEqual({
       title: 'Later',
       messageSeqs: [1, 4],
       source: {
@@ -169,13 +180,13 @@ describe('SessionTitleService', () => {
         model: { provider: 'mock', model: 'title-model' },
       },
       eventSeq: 1,
-      updatedAt: seed.events[1]?.time,
+      updatedAt: seed.snapshotEvents()[1]?.time,
     })
   })
 
   it('folds an empty or title-less log to undefined', () => {
     expect(foldSessionTitle([])).toBeUndefined()
     const empty = Session.create(SessionId('no-title'))
-    expect(foldSessionTitle(empty.events)).toBeUndefined()
+    expect(foldSessionTitle(empty.snapshotEvents())).toBeUndefined()
   })
 })

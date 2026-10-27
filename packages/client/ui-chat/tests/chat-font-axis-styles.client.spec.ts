@@ -21,12 +21,15 @@ function declarationsFrom(source: string, selector: string): string[] {
 describe('chat flow font-size axis', () => {
   it('think text reads the secondary tier (one step under the body size)', () => {
     const css = read('ReasoningRow.module.css')
-    for (const selector of ['.summary', '.thinkBody']) {
-      expect(declarationsFrom(css, selector)).toEqual(expect.arrayContaining([
-        'font-size: var(--dsh-content-font-size-secondary, 13px)',
-        'line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px))',
-      ]))
-    }
+    expect(declarationsFrom(css, '.summary')).toEqual(expect.arrayContaining([
+      'font-size: var(--dsh-content-font-size-secondary, 13px)',
+      'line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px))',
+      'white-space: nowrap',
+    ]))
+    expect(declarationsFrom(css, '.summaryText')).toEqual(expect.arrayContaining([
+      'overflow: hidden',
+      'text-overflow: ellipsis',
+    ]))
   })
 
   it('command and context summaries read the secondary tier on the shared row line', () => {
@@ -45,14 +48,13 @@ describe('chat flow font-size axis', () => {
 
   it('the message clock and action glyphs scale with the text they serve', () => {
     const actions = read('MessageIconActions.module.css')
-    // Both clocks read the secondary tier: the assistant tail's meta line
-    // (the whole-line usage trigger) and the user row's clock stay one step
-    // under the body size so the two rows match.
+    // The user clock reads the secondary tier. The assistant tail is one
+    // further pixel down, matching its usage trigger and supporting metadata.
     expect(declarationsFrom(actions, '.timeStart')).toEqual(expect.arrayContaining([
       'font-size: var(--dsh-content-font-size-secondary, 13px)',
     ]))
     expect(declarationsFrom(actions, '.timeEnd')).toEqual(expect.arrayContaining([
-      'font-size: var(--dsh-content-font-size-secondary, 13px)',
+      'font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 1px)',
     ]))
     expect(declarationsFrom(actions, '.action svg')).toEqual(expect.arrayContaining([
       'width: calc(15px + var(--dsh-content-font-delta, 0px))',
@@ -89,7 +91,7 @@ describe('chat flow font-size axis', () => {
   it('the usage-details trigger reads the secondary tier like its clock label', () => {
     const css = read('TurnUsagePanel.module.css')
     expect(declarationsFrom(css, '.trigger')).toEqual(expect.arrayContaining([
-      'font-size: var(--dsh-content-font-size-secondary, 13px)',
+      'font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 1px)',
       'line-height: calc(24px + var(--dsh-content-font-delta, 0px))',
     ]))
   })
@@ -137,12 +139,30 @@ describe('chat flow font-size axis', () => {
     // no-hover devices keep the row visible. 'always' has no rule at all —
     // absence, not an override, keeps the latest turn's row shown.
     const css = read('MessageIconActions.module.css')
-    expect(declarationsFrom(css, "[data-actions-reveal='hover'] .actions"))
-      .toEqual(expect.arrayContaining(['opacity: 0']))
-    expect(css).toMatch(
-      /\[data-actions-reveal='hover'\]:hover \.actions,\s*\[data-actions-reveal='hover'\]:focus-within \.actions \{\s*opacity: 1/,
-    )
+    expect(css).toContain("[data-actions-reveal='hover'] .actions,")
+    expect(css).toMatch(/\) \.actions \{\s*opacity: 0/)
+    expect(css).toContain("[data-actions-reveal='hover']:hover .actions,")
+    expect(css).toContain("[data-actions-reveal='hover']:focus-within .actions,")
+    expect(css).toMatch(/\):focus-within \.actions \{\s*opacity: 1/)
     expect(css).not.toContain("[data-actions-reveal='always']")
+  })
+
+  it('uses flow sibling selectors to reveal only the latest user-authored row', () => {
+    const css = read('MessageIconActions.module.css')
+    const userKinds = ":is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering'])"
+    expect(css).toContain(`${userKinds}:has(\n    ~ ${userKinds}\n  ) .actions`)
+    expect(css).toContain('):hover .actions')
+    expect(css).toContain('):focus-within .actions')
+  })
+
+  it('keeps empty outer Seats in flow without adding height or sibling gaps', () => {
+    const css = read('ChatView.module.css')
+    const emptySelector = '.flowItem:is(:empty, :has(> [data-slot="conversation.chat.node"]:empty))'
+    const empty = declarationsFrom(css, emptySelector)
+    expect(empty).toContain('height: 0')
+    expect(empty).not.toContain('display: none')
+    expect(css).toContain(`:is(.column, :global([data-slot="conversation.chat.flow"])) > :not([hidden]):not(.textInteraction):not(${emptySelector})`)
+    expect(css).toContain(`~ :not([hidden]):not(.textInteraction):not(${emptySelector})`)
   })
 
   it('the interrupted-turn tag stays fixed like the dense token variants', () => {
