@@ -8,7 +8,7 @@ Status: implemented
 
 [CI](../../../../.github/workflows/ci.yml) 将其静态、覆盖率、consumer 与原生 Windows 作业绑定到私有 runner 标签（`dsh-ubuntu-24-04-16core`、`dsh-windows-2025-16core`）。本 fork 无法分配这些池，那些作业会无限排队，`all checks passed` 也永远不会结束。要求该聚合结果的分支保护因此无法完成。
 
-在 Actions 选项卡中禁用上游 `CI` 工作流可以解除死锁。同一文件里其余已在托管 runner 上运行的作业——Node 22.19 / 26 兼容性、Python SDK 套件、发布形态的 Linux x64 Python runtime 构建器，以及 Wine Windows 通道——随后也会停止运行，因为它们属于被禁用的工作流，而不在可移植文件中。
+在 Actions 选项卡中禁用上游 `CI` 工作流可以解除死锁。同一文件里其余已在托管 runner 上运行的作业——Node 24.9 / 26 兼容性、Python SDK 套件、发布形态的 Linux x64 Python runtime 构建器，以及 Wine Windows 通道——随后也会停止运行，因为它们属于被禁用的工作流，而不在可移植文件中。
 
 把 `ci.yml` 里这些私有 runner 作业改到 `ubuntu-latest` 可以恢复信号，但该文件在上游变动频繁，每次同步都会在 `runs-on` 表达式上冲突。
 
@@ -21,7 +21,7 @@ Status: implemented
 - `static` 在完整历史与 `DSH_ARCHIVE_BASE_REF`（拉取请求的 base SHA，或 `dev/compat` 推送上的 `github.event.before`）下运行 `pnpm run check:ci:static`，然后运行 `build:lib:host`，再运行 `typecheck:contracts-ready` 与 `lint:contracts-ready`。静态聚合拥有 runtime-closure、workspace 约束、package invariant、Cordis 配置、文档、catalog、module-graph 和 `knip`；typecheck 与 lint 留在本作业中，因为静态聚合并不拥有它们。Client tsc 会解析包 `remote` 子路径下生成的 Typert remote，因此 Host 契约构建必须先于它——与上游 consumer 通道的 `typertContractsGate()` 顺序相同。
 - `snapshots` 先用 `scripts/prepare-ci-bubblewrap.sh` 准备 bubblewrap，再用 `--with-deps` 安装 Playwright Chromium（库模式 `test:snapshot` 包含 `apps/web/tests/**/*.snapshot.ts`），再运行与 `snapshotGate()` 相同的官方 `pnpm run build` 加 `DSH_EXAMPLE_MODE=lib` `vitest.snapshot.config.ts` 图，并用 `DSH_SNAPSHOT_NAME_PATTERN`（`^(?!.*pwsh-tool-turn)`）上的 `--testNamePattern` 省略两项托管 pwsh headless 运行。该 snapshots 步骤通过 `pnpm exec vitest run` 调用该配置；`pnpm run test:snapshot -- --testNamePattern` 会再插入一个 `--`，vitest 会把这个 `--` 之后的内容当成文件过滤，名称模式因此不会生效。该名称模式放在环境变量里，避免 YAML `run` 字符串展开 `!`。Lib-mode Web 快照会请求 `workspace-write` 并拒绝在无隔离环境下运行；ACP 与 headless 会话在没有可用 sandbox 后端时会注入 `danger-full-access` 运行时上下文快照，而这与带 sandbox 录制的 fixture 不一致。托管 Ubuntu 镜像自带 `pwsh`，因此两项 `pwshOnly` 场景本会实际执行：持久 PTY 返回的是 shell 初始化回滚缓冲而不是命令输出，一次性 `pwsh-tool-turn` 会发出已提交 fixture 中没有的 `permission/preset` 钉住事件。已提交 fixture 不会被改写成这些托管结果。该作业设置 `DSH_SNAPSHOT_MAX_CONCURRENCY=1`，以免并行快照文件饿死 DeepSeek SSE keep-alive 注释测试。fixture 保护仍覆盖 `snapshots/session/persistent-pwsh-tool-turn/` 与 `snapshots/session/pwsh-tool-turn/`。本地 `pnpm run test:snapshot` 仍会执行这两个场景。跳过只写在 [`fork-ci.yml`](../../../../.github/workflows/fork-ci.yml)：`snapshot.yml` 拒绝未知字段，而改 `session-snapshot` 会在每次同步时冲突。
 - `artifacts` 运行 `pnpm run check:ci:artifacts`（官方 `pnpm run build`，随后 publint、built-package invariants、`verify-node-next-types` 和 built-bin smokes），然后运行 `pnpm run duplication` 以及带 `DSH_DOC_TYPECHECK_USE_BUILD_OUTPUT=1` 的 `doc-typecheck:contracts-ready`。在该官方构建之后，它用 `scripts/prepare-ci-bubblewrap.sh` 准备 bubblewrap，再用 `--with-deps` 安装 Playwright Chromium（与上游 consumer 作业的托管路径相同），并运行 `DSH_SNAPSHOT=replay TZ=Asia/Shanghai pnpm run test:web:ci`。托管 `ubuntu-latest` 是 UTC；已持久化的 Web 回放 golden 把 `clientTimeZone` 钉在 `Asia/Shanghai`，而 Chromium 的 `Intl.DateTimeFormat` 会跟随 `TZ`。`scripts/run-web-snapshots.ts` 在 `hmr-live.e2e.ts` 之前运行 `apps/web/tests/built-boot.expected.e2e.ts`，因为该摘要会哈希官方 `apps/web/dist` 与 `lib/client.js`，而 `dev:web` 会改写这些树。库模式 Web 快照会请求 `workspace-write` 并拒绝在无隔离环境下运行。托管 `ubuntu-latest` 有 4 个 CPU，因此 `DSH_WEB_SNAPSHOT_WORKERS` 为 `2`（上游在 16 核池上使用 `6`）。该作业不运行 `check:ci:consumers`：那个聚合还会重复 snapshots 与 node-compat。
-- `node-compat` 在 Node 22.19、Node 24 与 Node 26 上运行 `check:node-compat`。22.19 与 26 复现上游托管矩阵。Node 24 覆盖被禁用的 consumer 通道里 `ciConsumerGates()` 运行的 source-worker、Zstandard、source-launch 和 jsdom 冒烟；`check:ci:artifacts` 与 `check:ci:snapshot` 并不包含它们。
+- `node-compat` 在 Node 24.9 与 Node 26 上运行 `check:node-compat`，即 `ci.yml` 中的托管矩阵。Node 24.9 是钉住的下限（`BUILD_BACKED_NODE_COMPAT_VERSION`）：该作业构建产物并运行 CLI lazy-search 冒烟。Node 26 运行源码兼容性冒烟。该作业在这些冒烟之前准备 bubblewrap，然后检查 Loader 内部形状检测。
 - `python-sdk` 运行无密钥的 Python 3.10 SDK 套件。
 - `python-runtime` 以 `ci: true` 调用共享的[单文件可执行文件构建器](../../../../.github/workflows/build-exe-for-python-sdk.yml) 构建 `node24-linux-x64`，并映射 `secrets.DEEPSEEK_API_KEY_EXTERNAL`，与[必需的 Python runtime 作业](../../archived/testing/2026-08-12-required-python-runtime-pull-request-ci.md)一致。可复用工作流只有在调用方传入时才会收到具名 secret。拉取请求事件会跳过已安装 wheel 的 live-API preflight，因为本 GitHub fork 会设置 `head.repo.fork`；向 `dev/compat` 的推送会运行该 preflight，并在 secret 为空时失败。
 - `windows` 在 `ubuntu-latest` 上运行 `scripts/wine-windows-gates.sh`，与[可移植拉取请求 CI 记录](../../archived/process/2026-07-23-portable-required-pull-request-ci.md)中的阻塞式 Wine 通道一致。
@@ -60,7 +60,7 @@ Status: implemented
 
 **把 `built-boot.expected.e2e.ts` 从 `test:web:ci` 的 serialFiles 里拿掉。** 该摘要会哈希官方 `apps/web/dist` 与 `lib/client.js`。`hmr-live` 会启动 `dev:web` 并改写这些树，因此摘要必须先运行。
 
-**只复现托管的 Node 22.19 / 26 矩阵。** 这与 `ci.yml` 的 `node-compat` 作业一致，但会丢掉被禁用的 consumer 通道在 Node 24 上运行的 `check:node-compat` 冒烟。source-worker、Zstandard、source-launch 或 jsdom 上仅 Node 24 的失败随后仍能满足 `fork checks passed`。
+**把兼容性钉在最新 Node 24，或保留 Node 22.19。** 最新 24 不是 `24.9` 下限，因此 `nodeCompatGates()` 会跳过依赖构建的 CLI 冒烟。Node 22.19 在 `engines.node`（`>=24.9.0`）之外。托管矩阵是 Node 24.9 与 Node 26。
 
 **省略托管的 Python SDK 或 Python runtime 作业。** 这些作业在上游 CI 中已经运行在 `ubuntu-latest` 上。禁用该工作流却不复现它们，会从必需判定中丢掉两项 Python 分发检查。
 

@@ -9,7 +9,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 # --- Node -----------------------------------------------------------------
-# package.json requires node ^22.19.0 || >=24.0.0; CI's primary version is 24.
+# package.json engines require node >=24.9.0; CI's primary version is 24.
 # The base image's default `node` can be older, so pin node 24 through nvm and
 # make it the login-shell default the interactive agent inherits.
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
