@@ -13,7 +13,8 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { LspError, LspProviderId } from '@deepseek-ai/dsh-lsp'
+import { LspError, type LspProviderId } from '@deepseek-ai/dsh-lsp'
+import { HarnessError } from '@deepseek-ai/dsh-error'
 import type {
   LspProvider,
   LspProviderQuery,
@@ -26,19 +27,7 @@ import type { HostWorkspace } from './host.ts'
 import { LspInstance } from './instance.ts'
 import type { ConnectionSpawner } from './connection.ts'
 import type { InstanceSpec } from './instance.ts'
-
-export { canonicalizeWorkspace, readHostSource } from './host.ts'
-export { encodeMessage, MessageDecoder } from './framing.ts'
-export {
-  negotiatePositionEncoding,
-  normalizeHover,
-  normalizeLocations,
-  requestMethod,
-  supportsOperation,
-  supportsTransientOpen,
-} from './translate.ts'
-export { LspInstance } from './instance.ts'
-export { LspConnection } from './connection.ts'
+import { brandString } from '@deepseek-ai/dsh-brand'
 
 /** Cordis plugin name for loader diagnostics. */
 export const name = 'lsp-stdio'
@@ -114,6 +103,33 @@ function throwTeardownFailures(results: readonly PromiseSettledResult<void>[], m
   }
   if (failures.length === 1) throw failures[0]
   if (failures.length > 1) throw new AggregateError(failures, message)
+}
+
+/**
+ * A coded query failure whose instance teardown also failed. It keeps the query failure's `name`
+ * and `code` so tool results route on the query outcome; `cause` aggregates both failures. It does
+ * not keep the query failure's class, so route on `name` and `code`, not `instanceof`.
+ */
+class LspQueryTeardownError extends HarnessError {
+  constructor(query: HarnessError, teardown: unknown, cause: AggregateError) {
+    super(`${query.message}; language server teardown also failed: ${messageOf(teardown)}`, query.code, { cause })
+    this.name = query.name
+  }
+}
+
+/**
+ * Combine a query failure with the teardown failure of its instance. A `HarnessError` query
+ * failure keeps its identity on the combined error; any other query failure has no identity to keep
+ * and both surface as an `AggregateError`.
+ */
+function queryAndTeardownFailure(query: unknown, teardown: unknown): Error {
+  const both = new AggregateError([query, teardown], 'LSP operation and teardown failed')
+  return query instanceof HarnessError ? new LspQueryTeardownError(query, teardown, both) : both
+}
+
+/** Read a thrown value's message for a combined failure report. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /**
@@ -233,7 +249,7 @@ class LocalLspProvider implements LspProvider {
     private readonly executable: string,
     private readonly spawner: ConnectionSpawner,
   ) {
-    this.id = LspProviderId(providerId)
+    this.id = brandString<LspProviderId>(providerId)
     this.extensionToLanguage = config.extensionToLanguage
   }
 
@@ -281,23 +297,32 @@ class LocalLspProvider implements LspProvider {
       // synchronous get-or-create so every spawned process remains owned by teardown.
       this.assertActive(querySignal)
       let instance = this.instanceFor(workspaceKey, workspace)
-      try {
-        return await instance.query(request, source, querySignal)
-      } catch (error) {
-        // A selected child can have died while idle or fail during the next write. Queries are
-        // read-only, so replace that transport once and retry transparently.
-        if (!instance.isTransportFailure(error)) throw error
-        await instance.dispose()
-        this.evictIfCurrent(workspaceKey, instance)
-        this.assertActive(querySignal)
-        instance = this.instanceFor(workspaceKey, workspace)
-        return await instance.query(request, source, querySignal)
-      } finally {
-        // Reach quiescence before dropping a dead slot; a replacement must survive this ownership check.
+      let canRetryTransport = true
+      for (;;) {
+        const [queryOutcome] = await Promise.allSettled([
+          instance.query(request, source, querySignal),
+        ])
+        let teardownOutcome: PromiseSettledResult<void> | undefined
         if (instance.dead) {
-          await instance.dispose()
+          ;[teardownOutcome] = await Promise.allSettled([instance.dispose()])
+          // A dead instance is never reusable, even when its final quiescence observation fails.
           this.evictIfCurrent(workspaceKey, instance)
         }
+        if (teardownOutcome?.status === 'rejected') {
+          if (queryOutcome.status === 'rejected') {
+            throw queryAndTeardownFailure(queryOutcome.reason, teardownOutcome.reason)
+          }
+          throw teardownOutcome.reason
+        }
+        if (queryOutcome.status === 'fulfilled') return queryOutcome.value
+        // A selected child can have died while idle or fail during the next write. Queries are
+        // read-only, so replace that transport once and retry transparently after clean disposal.
+        if (!canRetryTransport || !instance.isTransportFailure(queryOutcome.reason)) {
+          throw queryOutcome.reason
+        }
+        canRetryTransport = false
+        this.assertActive(querySignal)
+        instance = this.instanceFor(workspaceKey, workspace)
       }
     })
   }

@@ -4,7 +4,9 @@
     "rootDir": "src",
     "outDir": "lib/types"
   },
-  "include": ["src"],
+  "include": [
+    "src"
+  ],
   "references": [
     {
       "path": "../../../vendor/cosmokit"
@@ -19,6 +21,9 @@
       "path": "../../llm/llm"
     },
     {
+      "path": "../../util/error"
+    },
+    {
       "path": "../../core/tools"
     },
     {
@@ -28,10 +33,22 @@
       "path": "../../subprocess/subprocess"
     },
     {
-      "path": "../../runtime-diagnostics/invariants"
+      "path": "../../util/timeout"
     },
     {
-      "path": "../../util/timeout"
+      "path": "../../util/http-proxy"
+    },
+    {
+      "path": "../mcp-resources"
+    },
+    {
+      "path": "../../core/system-prompt"
+    },
+    {
+      "path": "../../credentials/credentials"
+    },
+    {
+      "path": "../../util/values"
     }
   ]
 }

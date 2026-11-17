@@ -21,22 +21,22 @@
       "path": "../../../vendor/group"
     },
     {
-      "path": "../../../vendor/hmr"
+      "path": "../../util/launch-environment"
     },
     {
-      "path": "../../runtime-diagnostics/invariants"
+      "path": "../../util/home-paths"
     },
     {
-      "path": "../../core/system-prompt"
+      "path": "../../util/official-bundles"
+    },
+    {
+      "path": "../../util/package-manifest"
     },
     {
       "path": "../../util/atomic-write"
     },
     {
-      "path": "../../util/launch-environment"
-    },
-    {
-      "path": "../../util/home-paths"
+      "path": "../../util/native-command"
     }
   ]
 }

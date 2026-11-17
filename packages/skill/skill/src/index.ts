@@ -12,11 +12,14 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-llm'
+import { SkillError } from './error.ts'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { NamedEntries, ScopedLayers, scopeChainOf, scopeOf } from '@deepseek-ai/dsh-scope'
 import type { ScopeKey, ScopeLayer } from '@deepseek-ai/dsh-scope'
 import z from '@deepseek-ai/schemastery'
 import type Schema from '@deepseek-ai/schemastery'
+
+export { SkillError, type SkillErrorCode } from './error.ts'
 
 const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const DEFAULT_COLLECT_CACHE_ENTRIES = 128
@@ -55,6 +58,8 @@ export interface SkillInvocationPolicy {
 
 /** Invocation-neutral skill metadata returned by `ctx.skills.list()`. */
 export interface SkillSummary {
+  /** Absolute instruction file path when supplied by the provider; absent for virtual skills. */
+  readonly path?: string
   /** Kebab-case identifier used to address the skill. */
   readonly name: string
   /** Short routing description shown by discovery consumers. */
@@ -77,8 +82,6 @@ export interface SkillCandidate extends SkillSummary {
   readonly rank: number
   /** Opaque provider-owned handle passed back to `provider.get()`. */
   readonly locator: unknown
-  /** Absolute file path when the provider has one. */
-  readonly path?: string
   /** Parsed optional metadata object from provider-specific skill frontmatter. */
   readonly metadata?: Readonly<Record<string, unknown>>
 }
@@ -87,8 +90,6 @@ export interface SkillCandidate extends SkillSummary {
 export interface SkillDefinition extends SkillSummary {
   /** Markdown instruction body after any provider-specific metadata removal. */
   readonly content: string
-  /** Absolute file path when the skill came from disk. */
-  readonly path?: string
   /** Parsed optional metadata object from frontmatter. */
   readonly metadata?: Readonly<Record<string, unknown>>
 }
@@ -675,8 +676,8 @@ function normalizeProviderObservation(output: unknown, providerName: string): Sk
   return observation as SkillProviderObservation
 }
 
-function invalidProviderObservation(providerName: string): TypeError {
-  return new TypeError(`skill provider "${providerName}" list() must return an array or { candidates, complete } observation`)
+function invalidProviderObservation(providerName: string): SkillError {
+  return new SkillError(`skill provider "${providerName}" list() must return an array or { candidates, complete } observation`, 'SKILL_INVALID_DEFINITION')
 }
 
 const RUNTIME_SKILL_PROVIDER: SkillProvider = {
@@ -708,41 +709,41 @@ function runtimeCandidate(skill: SkillDefinition): SkillCandidate {
 
 function validateCandidate(candidate: SkillCandidate, providerName: string): void {
   if (typeof candidate.name !== 'string') {
-    throw new TypeError(`skill provider "${providerName}" returned a non-string skill name`)
+    throw new SkillError(`skill provider "${providerName}" returned a non-string skill name`, 'SKILL_INVALID_DEFINITION')
   }
   if (!SKILL_NAME.test(candidate.name)) {
-    throw new Error(`skill provider "${providerName}" returned invalid skill name "${candidate.name}"`)
+    throw new SkillError(`skill provider "${providerName}" returned invalid skill name "${candidate.name}"`, 'SKILL_INVALID_DEFINITION')
   }
   if (typeof candidate.description !== 'string') {
-    throw new TypeError(`skill provider "${providerName}" returned skill "${candidate.name}" with a non-string description`)
+    throw new SkillError(`skill provider "${providerName}" returned skill "${candidate.name}" with a non-string description`, 'SKILL_INVALID_DEFINITION')
   }
   if (candidate.description.length === 0) {
-    throw new Error(`skill provider "${providerName}" returned skill "${candidate.name}" without a description`)
+    throw new SkillError(`skill provider "${providerName}" returned skill "${candidate.name}" without a description`, 'SKILL_INVALID_DEFINITION')
   }
   validateInvocation(candidate.invocation, `skill provider "${providerName}" returned skill "${candidate.name}"`)
   if (candidate.whenToUse !== undefined && typeof candidate.whenToUse !== 'string') {
-    throw new TypeError(`skill provider "${providerName}" returned skill "${candidate.name}" with a non-string whenToUse`)
+    throw new SkillError(`skill provider "${providerName}" returned skill "${candidate.name}" with a non-string whenToUse`, 'SKILL_INVALID_DEFINITION')
   }
   if (typeof candidate.source !== 'string') {
-    throw new TypeError(`skill provider "${providerName}" returned skill "${candidate.name}" with a non-string source`)
+    throw new SkillError(`skill provider "${providerName}" returned skill "${candidate.name}" with a non-string source`, 'SKILL_INVALID_DEFINITION')
   }
   if (typeof candidate.rank !== 'number' || !Number.isFinite(candidate.rank)) {
-    throw new Error(`skill provider "${providerName}" returned skill "${candidate.name}" with an invalid rank`)
+    throw new SkillError(`skill provider "${providerName}" returned skill "${candidate.name}" with an invalid rank`, 'SKILL_INVALID_DEFINITION')
   }
   if (typeof candidate.provider !== 'string') {
-    throw new TypeError(`skill provider "${providerName}" returned skill "${candidate.name}" with a non-string provider`)
+    throw new SkillError(`skill provider "${providerName}" returned skill "${candidate.name}" with a non-string provider`, 'SKILL_INVALID_DEFINITION')
   }
   if (candidate.provider !== providerName) {
-    throw new Error(`skill provider "${providerName}" returned skill "${candidate.name}" for provider "${candidate.provider}"`)
+    throw new SkillError(`skill provider "${providerName}" returned skill "${candidate.name}" for provider "${candidate.provider}"`, 'SKILL_INVALID_DEFINITION')
   }
   if (candidate.path !== undefined && typeof candidate.path !== 'string') {
-    throw new TypeError(`skill provider "${providerName}" returned skill "${candidate.name}" with a non-string path`)
+    throw new SkillError(`skill provider "${providerName}" returned skill "${candidate.name}" with a non-string path`, 'SKILL_INVALID_DEFINITION')
   }
 }
 
 function validateRuntimeSkill(skill: SkillRegistration): void {
-  if (!SKILL_NAME.test(skill.name)) throw new Error(`invalid skill name "${skill.name}"`)
-  if (skill.description.length === 0) throw new Error(`skill "${skill.name}" requires a description`)
+  if (!SKILL_NAME.test(skill.name)) throw new SkillError(`invalid skill name "${skill.name}"`, 'SKILL_INVALID_DEFINITION')
+  if (skill.description.length === 0) throw new SkillError(`skill "${skill.name}" requires a description`, 'SKILL_INVALID_DEFINITION')
   validateInvocation(skill.invocation, `runtime skill "${skill.name}"`)
 }
 
@@ -756,22 +757,23 @@ function validateDefinition(skill: SkillDefinition): void {
   const provider = skill.provider
   const content = skill.content
   const path = skill.path
-  if (typeof name !== 'string') throw new TypeError('loaded skill name must be a string')
-  if (!SKILL_NAME.test(name)) throw new Error(`loaded skill has invalid name "${name}"`)
-  if (typeof description !== 'string') throw new TypeError(`loaded skill "${name}" description must be a string`)
-  if (description.length === 0) throw new Error(`loaded skill "${name}" requires a description`)
+  if (typeof name !== 'string') throw new SkillError('loaded skill name must be a string', 'SKILL_INVALID_DEFINITION')
+  if (!SKILL_NAME.test(name)) throw new SkillError(`loaded skill has invalid name "${name}"`, 'SKILL_INVALID_DEFINITION')
+  if (typeof description !== 'string') throw new SkillError(`loaded skill "${name}" description must be a string`, 'SKILL_INVALID_DEFINITION')
+  if (description.length === 0) throw new SkillError(`loaded skill "${name}" requires a description`, 'SKILL_INVALID_DEFINITION')
   validateInvocation(invocation, `loaded skill "${name}"`)
-  if (whenToUse !== undefined && typeof whenToUse !== 'string') throw new TypeError(`loaded skill "${name}" whenToUse must be a string`)
-  if (typeof source !== 'string') throw new TypeError(`loaded skill "${name}" source must be a string`)
-  if (typeof provider !== 'string') throw new TypeError(`loaded skill "${name}" provider must be a string`)
-  if (typeof content !== 'string') throw new TypeError(`loaded skill "${name}" content must be a string`)
-  if (path !== undefined && typeof path !== 'string') throw new TypeError(`loaded skill "${name}" path must be a string`)
+  if (whenToUse !== undefined && typeof whenToUse !== 'string') throw new SkillError(`loaded skill "${name}" whenToUse must be a string`, 'SKILL_INVALID_DEFINITION')
+  if (typeof source !== 'string') throw new SkillError(`loaded skill "${name}" source must be a string`, 'SKILL_INVALID_DEFINITION')
+  if (typeof provider !== 'string') throw new SkillError(`loaded skill "${name}" provider must be a string`, 'SKILL_INVALID_DEFINITION')
+  if (typeof content !== 'string') throw new SkillError(`loaded skill "${name}" content must be a string`, 'SKILL_INVALID_DEFINITION')
+  if (path !== undefined && typeof path !== 'string') throw new SkillError(`loaded skill "${name}" path must be a string`, 'SKILL_INVALID_DEFINITION')
 }
 
 function toSummary(skill: SkillDefinition | SkillCandidate): SkillSummary {
   const { name, description, whenToUse, invocation, source, provider, resourceBase } = skill
   return {
     name,
+    ...skill.path === undefined ? {} : { path: skill.path },
     description,
     ...whenToUse !== undefined ? { whenToUse } : {},
     invocation,
@@ -784,14 +786,14 @@ function toSummary(skill: SkillDefinition | SkillCandidate): SkillSummary {
 function validateInvocation(invocation: unknown, subject: string): void {
   if (invocation === undefined) return
   if (typeof invocation !== 'object' || invocation === null || Array.isArray(invocation)) {
-    throw new TypeError(`${subject} with a non-object invocation policy`)
+    throw new SkillError(`${subject} with a non-object invocation policy`, 'SKILL_INVALID_DEFINITION')
   }
   const policy = invocation as Record<string, unknown>
   if (typeof policy.modelInvocable !== 'boolean') {
-    throw new TypeError(`${subject} with a non-boolean invocation.modelInvocable`)
+    throw new SkillError(`${subject} with a non-boolean invocation.modelInvocable`, 'SKILL_INVALID_DEFINITION')
   }
   if (typeof policy.userInvocable !== 'boolean') {
-    throw new TypeError(`${subject} with a non-boolean invocation.userInvocable`)
+    throw new SkillError(`${subject} with a non-boolean invocation.userInvocable`, 'SKILL_INVALID_DEFINITION')
   }
 }
 

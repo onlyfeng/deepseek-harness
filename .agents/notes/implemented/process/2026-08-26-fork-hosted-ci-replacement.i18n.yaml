@@ -1,6 +1,19 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-08-26-fork-hosted-ci-replacement.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-08-26-fork-hosted-ci-replacement.md
-2026-08-26-fork-hosted-ci-replacement.md: 6361fc4365558163a79f142e064d7cd9e6389a70
-2026-08-26-fork-hosted-ci-replacement.zh.md: 2a65a69a1da4a7ad919fdd200feec6e8af45e82e
+/agent-note-fork-hosted-ci-replacement:
+  en: 4238a4e92213f749
+  zh: 955ee4f84c6c07bc
+/agent-note-fork-hosted-ci-replacement/problem:
+  en: c9fb74a2f811d8b1
+  zh: c7f02c5e02ba0056
+/agent-note-fork-hosted-ci-replacement/decision:
+  en: 1e3a7cb17823c6e9
+  zh: 5426b222ca9161b1
+/agent-note-fork-hosted-ci-replacement/alternatives-considered:
+  en: 12c05436221268ca
+  zh: c3e896bae3e8d750
+/agent-note-fork-hosted-ci-replacement/consequences:
+  en: f410c0d9cf78e4f0
+  zh: a83855fe7cfc96da

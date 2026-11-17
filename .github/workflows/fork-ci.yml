@@ -2,16 +2,17 @@ name: Fork CI
 
 # Fork-owned gate for onlyfeng/deepseek-harness on GitHub-hosted runners.
 #
-# The upstream `CI` workflow (ci.yml) binds its coverage, static, consumer, and
-# windows-native jobs to private runner labels (dsh-ubuntu-24-04-16core,
-# dsh-windows-2025-16core) this fork does not have, so those jobs queue forever
-# and its `all checks passed` aggregate never settles. The upstream `CI`
-# workflow is therefore disabled on this fork (Actions tab -> CI -> Disable
-# workflow) and this workflow gates the fork's changes on hosted runners
-# instead. Operators also disable `CI master` and `Build PR preview` (the
-# latter binds the same private Ubuntu label and needs Cloudflare secrets).
-# Those workflow files stay unmodified. This file does not exist upstream, so
-# syncing upstream never conflicts with it.
+# The upstream `CI` workflow (ci.yml) binds its coverage, static, and consumer
+# jobs to the private runner label dsh-ubuntu-24-04-16core this fork does not
+# have, so those jobs queue forever and its `all checks passed` aggregate
+# never settles. `CI Windows` (ci-windows.yml) binds every job to
+# dsh-windows-2025-16core / dsh-win-ci for the same reason. The upstream `CI`
+# and `CI Windows` workflows are therefore disabled on this fork (Actions tab
+# -> Disable workflow) and this workflow gates the fork's changes on hosted
+# runners instead. Operators also disable `CI master`. Those workflow files
+# stay unmodified. This file does not exist upstream, so syncing upstream
+# never conflicts with it. `CI Python` (ci-python.yml) and `Build PR preview`
+# already run on hostable runners upstream and stay enabled.
 #
 # Coverage relative to the disabled upstream CI:
 #   - check:ci:static (with archive base-ref), then build:lib:host, then
@@ -50,8 +51,8 @@ name: Fork CI
 #     Lib-mode Web snapshots request workspace-write and refuse to run
 #     unconfined. Hosted ubuntu-latest has 4 CPUs, so
 #     DSH_WEB_SNAPSHOT_WORKERS=2 (upstream uses 6 on the 16-core pool).
-#   - node-compat matrix (22.19, 24, and 26): the hosted 22.19/26 smokes plus
-#     the Node 24 check:node-compat the disabled consumer lane ran.
+#   - node-compat matrix (24.9 and 26): the hosted upstream smokes, matching
+#     the supported floor and latest 24.x/26 upstream's own ci.yml runs.
 #   - python-sdk and python-runtime: the hosted Python SDK suite and the
 #     release-shaped Linux x64 runtime builder. python-runtime maps
 #     DEEPSEEK_API_KEY_EXTERNAL into the reusable workflow (callers must pass
@@ -286,12 +287,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - node: '22.19'
-            name: node 22.19
-            runner: ubuntu-latest
-            gate_concurrency: '1'
-          - node: 24
-            name: node 24
+          - node: '24.9'
+            name: node 24.9
             runner: ubuntu-latest
             gate_concurrency: '1'
           - node: 26

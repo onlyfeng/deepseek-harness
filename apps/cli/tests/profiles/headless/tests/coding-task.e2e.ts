@@ -6,7 +6,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { codingHarness, finalText, SYSTEM_PROMPT, waitForIdle } from './harness.ts'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionId } from '@deepseek-ai/dsh-session'
+import { brandString } from '@deepseek-ai/dsh-brand'
 
 /**
  * The swebench-style smoke test: a real model fixes a real bug in a temp
@@ -54,8 +55,8 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY)('coding task: fix a failing test 
     const before = spawnSync('node', ['add.test.js'], { cwd: workdir })
     expect(before.status).not.toBe(0)
 
-    ctx = await codingHarness(workdir, { persona: SYSTEM_PROMPT })
-    const agent = ctx.agentLoop.create(SessionId('e2e-task'), { provider: 'deepseek-official', model: 'deepseek-v4-flash' })
+    ctx = await codingHarness(workdir, { personaPrefix: SYSTEM_PROMPT })
+    const agent = await ctx.agentLoop.create(brandString<SessionId>('e2e-task'), { provider: 'deepseek-official', model: 'deepseek-v4-flash' }, { cwd: workdir })
 
     agent.followup(createUserMessage({
       content: [{
@@ -67,7 +68,7 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY)('coding task: fix a failing test 
     await waitForIdle(ctx, agent)
 
     // The agent claims success…
-    const summary = finalText([...agent.session.events]).toLowerCase()
+    const summary = finalText(agent.session.snapshotEvents()).toLowerCase()
     expect(summary.length).toBeGreaterThan(0)
 
     // …and the world agrees: the test passes when WE run it, and the test

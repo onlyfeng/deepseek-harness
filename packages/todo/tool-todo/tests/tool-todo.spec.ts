@@ -1,11 +1,15 @@
+import { executeToolFixture } from '@deepseek-ai/dsh-tool-testkit'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
-import { createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import type { ToolCallId } from '@deepseek-ai/dsh-llm/types'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, type SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import { type Agent } from '@deepseek-ai/dsh-agent'
 
@@ -23,14 +27,15 @@ const testToolSignal = new AbortController().signal
 
 /** A parent Agent backed by a real Session — the tool reads `agent.session`. */
 function agentWithSession(id = 'parent-1'): Agent & { session: Session } {
-  const session = Session.create(SessionId(id))
-  return { id: SessionId(id), session } as unknown as Agent & { session: Session }
+  const session = Session.create(brandString<SessionId>(id))
+  return { id: brandString<SessionId>(id), session } as Agent & { session: Session }
 }
 
 async function setup(allowParallelInProgress: boolean): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeToolExecutor)
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(tool, { allowParallelInProgress })
   return ctx
@@ -39,9 +44,9 @@ async function setup(allowParallelInProgress: boolean): Promise<Context> {
 let callCounter = 0
 function callTodo(ctx: Context, args: unknown, over: { agent?: Agent | undefined } = {}) {
   const agent = 'agent' in over ? over.agent : agentWithSession()
-  return ctx.tools.execute({
+  return executeToolFixture(ctx, {
     signal: testToolSignal,
-    callId: ToolCallId(`call-${++callCounter}`),
+    callId: brandString<ToolCallId>(`call-${++callCounter}`),
     name: 'todo_write',
     arguments: args,
     ...agent ? { agent } : {},
@@ -82,7 +87,7 @@ describe('dsh-tool-todo', () => {
     })
     expect(text(result)).toContain('1 pending, 1 in progress, 0 completed')
 
-    const event = agent.session.events.findLast(e => e.type === 'todo/write')!
+    const event = agent.session.snapshotEvents().findLast(e => e.type === 'todo/write')!
     expect(event.data.todos).toEqual(todos)
   })
 
@@ -92,7 +97,7 @@ describe('dsh-tool-todo', () => {
     const result = await callTodo(ctx, { todos: [{ content: '  plan the work  ', status: 'pending' }] }, { agent })
     expect(result.isError).toBe(false)
 
-    const event = agent.session.events.findLast(e => e.type === 'todo/write')!
+    const event = agent.session.snapshotEvents().findLast(e => e.type === 'todo/write')!
     expect(event.data.todos).toEqual([{ content: 'plan the work', status: 'pending' }])
   })
 
@@ -105,7 +110,7 @@ describe('dsh-tool-todo', () => {
       { content: 'b', status: 'in_progress' },
     ] }, { agent })
 
-    const current = agent.session.events.findLast(e => e.type === 'todo/write')!.data.todos
+    const current = agent.session.snapshotEvents().findLast(e => e.type === 'todo/write')!.data.todos
     expect(current).toEqual([
       { content: 'a', status: 'completed' },
       { content: 'b', status: 'in_progress' },
@@ -139,7 +144,7 @@ describe('dsh-tool-todo', () => {
       todos,
       counts: { pending: 1, inProgress: 2, completed: 0 },
     })
-    expect(agent.session.events.findLast(e => e.type === 'todo/write')!.data.todos).toEqual(todos)
+    expect(agent.session.snapshotEvents().findLast(e => e.type === 'todo/write')!.data.todos).toEqual(todos)
   })
 
   describe('allowParallelInProgress', () => {
@@ -154,8 +159,9 @@ describe('dsh-tool-todo', () => {
       const result = await callTodo(ctx, { todos: parallel }, { agent })
       expect(result.isError).toBe(true)
       expect(text(result)).toContain('at most one task may be in_progress')
+      expect(result.error?.info).toEqual({ name: 'ToolArgsError', code: 'INVALID_ARGS' })
       // A rejected call must not reach the durable log.
-      expect(agent.session.events.some(e => e.type === 'todo/write')).toBe(false)
+      expect(agent.session.snapshotEvents().some(e => e.type === 'todo/write')).toBe(false)
     })
 
     it('false still accepts one active item', async () => {
@@ -177,12 +183,12 @@ describe('dsh-tool-todo', () => {
     it('instructs the model to keep at most one active, while true instructs parallel', async () => {
       const single = await setup(false)
       const singleDesc = single.tools.schemas().find(s => s.name === 'todo_write')!.description
-      expect(singleDesc).toContain('Keep AT MOST ONE todo `in_progress`')
-      expect(singleDesc).not.toContain('several at once')
+      expect(singleDesc).toContain('keep exactly one todo `in_progress`')
+      expect(singleDesc).not.toContain('several only')
 
       const parallelDesc = (await setup(true)).tools.schemas().find(s => s.name === 'todo_write')!.description
-      expect(parallelDesc).toContain('several at once when work genuinely runs in parallel')
-      expect(parallelDesc).not.toContain('AT MOST ONE')
+      expect(parallelDesc).toContain('several only when work runs in parallel')
+      expect(parallelDesc).not.toContain('exactly one')
     })
   })
 
@@ -195,6 +201,7 @@ describe('dsh-tool-todo', () => {
     const result = await callTodo(ctx, { todos })
     expect(result.isError).toBe(true)
     expect(text(result)).toContain(fragment)
+    expect(result.error?.info).toEqual({ name: 'ToolArgsError', code: 'INVALID_ARGS' })
   })
 
   it('rejects a non-agent caller (the list has no owning session)', async () => {
@@ -202,6 +209,7 @@ describe('dsh-tool-todo', () => {
     const result = await callTodo(ctx, { todos: [{ content: 'a', status: 'pending' }] }, { agent: undefined })
     expect(result.isError).toBe(true)
     expect(text(result)).toContain('owning agent session')
+    expect(result.error?.info).toEqual({ name: 'ToolContextUnavailableError', code: 'TOOL_CONTEXT_UNAVAILABLE' })
   })
 
   it('presents the call with a stable title and the list as raw input', async () => {
@@ -215,6 +223,7 @@ describe('dsh-tool-todo', () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(NativeToolExecutor)
     await ctx.plugin(SessionProjectionRegistry)
     const fiber = await ctx.plugin(tool, { allowParallelInProgress: true })
     expect(ctx.tools.schemas().some(s => s.name === 'todo_write')).toBe(true)
@@ -239,7 +248,7 @@ describe('dsh-tool-todo', () => {
 
 describe('todo/write event', () => {
   it('appends the whole-list snapshot and isolates the log from later mutation', () => {
-    const session = Session.create(SessionId('t1'))
+    const session = Session.create(brandString<SessionId>('t1'))
     session.append('turn/start', { turn: 1 })
     const todos: TodoItem[] = [
       { content: 'plan the work', status: 'in_progress' },
@@ -247,7 +256,7 @@ describe('todo/write event', () => {
     ]
     session.append('todo/write', { todos })
 
-    const event = session.events.findLast(e => e.type === 'todo/write')!
+    const event = session.snapshotEvents().findLast(e => e.type === 'todo/write')!
     expect(event.type).toBe('todo/write')
     expect(event.data.todos).toEqual(todos)
 
@@ -260,7 +269,7 @@ describe('todo/write event', () => {
   })
 
   it('is last-write-wins: the current list is the most recent todo/write', () => {
-    const session = Session.create(SessionId('t2'))
+    const session = Session.create(brandString<SessionId>('t2'))
     session.append('turn/start', { turn: 1 })
     session.append('todo/write', { todos: [{ content: 'first', status: 'pending' }] })
     session.append('todo/write', { todos: [
@@ -268,7 +277,7 @@ describe('todo/write event', () => {
       { content: 'second', status: 'in_progress' },
     ] })
 
-    const current = session.events.findLast(e => e.type === 'todo/write')!.data.todos
+    const current = session.snapshotEvents().findLast(e => e.type === 'todo/write')!.data.todos
     expect(current).toEqual([
       { content: 'first', status: 'completed' },
       { content: 'second', status: 'in_progress' },
@@ -276,7 +285,7 @@ describe('todo/write event', () => {
   })
 
   it('does not add a derived message or surface node', () => {
-    const session = Session.create(SessionId('t3'))
+    const session = Session.create(brandString<SessionId>('t3'))
     session.append('turn/start', { turn: 1 })
     session.append('user/message', createUserMessage({
       content: [{ type: 'text', text: 'q' }], source: { kind: 'user' },
@@ -289,15 +298,15 @@ describe('todo/write event', () => {
   })
 
   it('round-trips through a seeded replay identically without surface metadata', () => {
-    const original = Session.create(SessionId('t4'))
+    const original = Session.create(brandString<SessionId>('t4'))
     original.append('turn/start', { turn: 1 })
     original.append('todo/write', { todos: [{ content: 'only', status: 'completed' }] })
     original.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
-    const replayed = Session.create(SessionId('t4-replay'), [...original.events])
+    const replayed = Session.create(brandString<SessionId>('t4-replay'), original.snapshotEvents())
 
-    expect(replayed.events.findLast(e => e.type === 'todo/write')!.data.todos)
+    expect(replayed.snapshotEvents().findLast(e => e.type === 'todo/write')!.data.todos)
       .toEqual([{ content: 'only', status: 'completed' }])
-    expect(replayed.events.slice(0, original.seq)).toEqual(original.events)
+    expect(replayed.snapshotEvents(SessionLogOffset(0), original.seq)).toEqual(original.snapshotEvents())
     expect(replayed.firstLiveSeq).toBe(original.seq)
   })
 })

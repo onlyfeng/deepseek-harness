@@ -15,8 +15,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
-import { ToolCallId } from '@deepseek-ai/dsh-llm'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import type { ToolCallId } from '@deepseek-ai/dsh-llm/types'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SaveTextSpill } from '@deepseek-ai/dsh-spill'
 import LocalSpillStore, {
   DEFAULT_ROOT_PREFIX,
@@ -51,8 +52,8 @@ function writeAged(path: string, content: string, ageDays: number): void {
 
 function request(overrides: Partial<SaveTextSpill> = {}): SaveTextSpill {
   return {
-    owner: { sessionId: SessionId('sess-1') },
-    source: { toolName: 'web_fetch', callId: ToolCallId('call-1'), label: 'result' },
+    owner: { sessionId: brandString<SessionId>('sess-1') },
+    source: { kind: 'tool', toolName: 'web_fetch', callId: brandString<ToolCallId>('call-1'), label: 'result' },
     suggestedName: 'web_fetch.txt',
     content: 'the full body',
     ...overrides,
@@ -267,10 +268,12 @@ describe('startup cleanup sweep', () => {
   it('keeps a file exactly at the boundary (only strictly-older expires)', async () => {
     const dir = sessionDir(root, 'sess-1')
     mkdirSync(dir, { recursive: true })
-    const cutoffMs = Date.now() - 30 * DAY_MS
+    const requestedMs = Date.now() - 30 * DAY_MS
     const boundary = join(dir, 'boundary.txt')
     writeFileSync(boundary, 'x')
-    utimesSync(boundary, cutoffMs / 1000, cutoffMs / 1000)
+    utimesSync(boundary, requestedMs / 1000, requestedMs / 1000)
+    // Filesystems can round timestamps written through utimes.
+    const cutoffMs = statSync(boundary).mtimeMs
     await sweepSpillRoots({ roots: [active(root)], cutoffMs, warn: () => {} })
     expect(existsSync(boundary)).toBe(true)
   })

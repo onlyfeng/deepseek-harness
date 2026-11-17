@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-lsp-stdio` 把配置好的本地语言服务器命令变成 `ctx.lsp` 上的提供方：给它一张服务器命令与扩展名到语言的映射表，agent 就能针对这些语言的文件获得由真实语言服务器服务的语义代码导航——定义、引用、实现与悬停。一个插件实例针对每个配置的服务器注册一个隔离的提供方；每个提供方按工作区惰性启动一个服务器进程，并在查询时临时打开文档，因此查询之间不会累积任何文档状态。服务器与源文件始终位于已挂载的文件系统与子进程执行世界中。它是通用主机，而不是语言服务器目录或安装器——部署需要显式配置命令。本包信任所配置的服务器，自身不提供任何沙箱。
+使用 `dsh-lsp-stdio` 可让 agent（智能体）从显式配置的本地语言服务器获得定义、引用、实现与悬停信息。它把文件扩展名映射为语言标识符，按需为每个工作区启动一台服务器，并在每次查询时重新读取文件，不在查询之间保留文档状态。语言服务器进程与源文件读取共享已挂载的文件系统和子进程环境。本包不安装服务器，也不提供沙箱；部署方必须提供命令、映射和所需的隔离措施。同一服务器与工作区的查询串行执行，不同工作区可并行运行。
 
 ## 目录
 
@@ -25,7 +25,7 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-当部署拥有本地语言服务器——例如 `typescript-language-server`——并希望 harness 通过它们导航代码时，挂载此提供方。它需要描述同一执行世界的文件系统与子进程提供方，以及 `dsh-lsp` seam；若要向模型开放，还需要 `dsh-tool-lsp`。
+当部署拥有本地语言服务器——例如 `typescript-language-server`——并希望 harness 通过它们导航代码时，挂载此提供方。它需要位于同一执行世界的文件系统与子进程提供方，以及 `dsh-lsp` seam；若要向模型开放，还需要 `dsh-tool-lsp`。
 
 ### 最小配置
 
@@ -68,7 +68,7 @@ kind: "package-reference"
 
 ### 可观察的成功与失败
 
-成功的导航返回规范化位置，悬停返回规范化文本或无可悬停提示；空结果是成功的无结果响应。当服务器不支持该操作或临时打开／关闭同步（`LSP_UNSUPPORTED_OPERATION`）、源文件缺失、非普通文件、非 UTF-8、过大或位于规范工作区之外（在服务器启动前被拒绝），或服务器返回格式错误的载荷（`LSP_MALFORMED_RESPONSE`）时，查询会失败。被强制杀死的 harness 会让服务器继续运行直到自行退出——优雅关闭只发生在服务释放时。
+成功的导航返回规范化位置，悬停返回规范化文本或无可悬停提示；空结果是成功的无结果响应。在服务器启动前，缺失、非目录、非普通文件、非 UTF-8 或过大的工作区或源文件以其 `FsError` 错误码失败，位于规范工作区之外的源文件以 `LSP_FILE_OUTSIDE_WORKSPACE` 失败。随后，服务器不支持该操作或临时打开／关闭同步时查询以 `LSP_UNSUPPORTED_OPERATION` 失败，非 UTF-16 位置编码以 `LSP_UNSUPPORTED_ENCODING` 失败，格式错误的载荷以 `LSP_MALFORMED_RESPONSE` 失败，JSON-RPC 错误响应以 `LSP_SERVER_ERROR` 失败；进程或流失败时报告 `LSP_SPAWN_FAILED`、`LSP_SERVER_EXITED`、`LSP_PROTOCOL_ERROR` 或 `LSP_MESSAGE_TOO_LARGE`。[LSP 导航子系统](../../../docs/subsystems/lsp.zh.md#failures)给出每个错误码的含义与消费方操作。被强制杀死的 harness 会让服务器继续运行直到自行退出——优雅关闭只发生在服务释放时。
 
 ### 安全边界
 
@@ -91,7 +91,7 @@ kind: "package-reference"
 - **先读后启动。** 源文件在工作区队列内先完成解析、包含关系检查与字节限制，然后才创建任何进程，因此排队查询只会在轮到自身时读取当前字节，无效源文件也不会留下空闲的池化进程。
 - **每个规范工作区一个池化进程。** 实例按 `(server id, canonical workspace target)` 进行 single-flight；传输故障会在等待释放完成后于新进程上重试一次该只读查询。
 - **逐工作区串行化。** 每个工作区一条可中止队列，串行执行源读取／打开／查询／关闭生命周期；不同工作区并行运行，无法停止服务器的取消只会终止该实例。
-- **有边界的释放。** 优雅 `shutdown`／`exit` 升级为进程树终止（POSIX 进程组信号，Windows `taskkill /T /F`）；是否完全停稳由等待进程树退出确认，而非由终止操作自身的结果确认。
+- **有边界的释放。** 优雅 `shutdown`／`exit` 会升级到 subprocess 提供方的 managed-range 终止流程；是否完全停稳由等待整个 range 确认，而非由终止请求自身的结果确认。
 - **执行世界配对。** 服务器通过 `ctx.subprocess` 启动，`processId: null`（另一台机器或 PID namespace 不得监视 harness）；源文件通过 `ctx.fs` 读取；不发出 `fs/observed` 事件——只有 LSP 结果对模型可见。
 
 ### 源码地图
@@ -106,7 +106,6 @@ kind: "package-reference"
 | [`src/protocol.ts`](src/protocol.ts) | 协议类型子集：能力、位置、悬停、文本文档同步 |
 | [`src/translate.ts`](src/translate.ts) | 能力检查、UTF-16 协商、`Location`／`LocationLink`／hover 规范化 |
 | [`src/abort.ts`](src/abort.ts) | 融合调用方与释放信号的取消辅助 |
-| [`src/invariant.ts`](src/invariant.ts) | 不变式伴生插件（无运行时不变式；进程池与队列是私有状态） |
 
 ### 协议行为
 
@@ -119,10 +118,9 @@ kind: "package-reference"
 <a id="further-exploration"></a>
 ## 进一步探索
 
-当包级约定不够用时阅读以下页面。它们从共享的导航模型逐步进入 seam、工具与决策证据。
+当包级约定不够用时阅读以下页面。它们从共享的导航模型逐步进入 seam 与工具。
 
 - [LSP 导航子系统](../../../docs/subsystems/lsp.zh.md)——操作、坐标、请求与结果，以及 `LspError` code。
-- [LSP 能力 seam Agent Note](../../../.agents/notes/implemented/architecture/2026-07-15-lsp-capability-seam.zh.md)——设计原理、备选方案与刻意推迟的 API。
 - [dsh-lsp](../lsp/README.zh.md)——本提供方注册到的 seam。
 - [dsh-tool-lsp](../tool-lsp/README.zh.md)——基于该 seam 的面向模型工具。
 - [lsp 组地图](../README.zh.md)——三个包的家族及其相关文档。

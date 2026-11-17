@@ -11,9 +11,10 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { SessionId as sessionId, type SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionId as sessionId, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-agent'
-import { launchWebScaffold, webSnapshotMode, type WebScaffold } from './scaffold.ts'
+import { launchWebScaffold, readPersistedEvents, webSnapshotMode, type WebScaffold } from './scaffold.ts'
+import { brandString } from '@deepseek-ai/dsh-brand'
 
 const MODE = webSnapshotMode()
 const INITIAL = 'Explain event sourcing in one sentence.'
@@ -43,8 +44,8 @@ async function remote<T>(
 }
 
 /** POST one generated Session Remote unary through the API Gateway carrier. */
-function sessionRemote<T>(scaffold: WebScaffold, method: string, request: unknown): Promise<RpcResult<T>> {
-  return remote<T>(scaffold, `session/${method}`, { request })
+async function sessionRemote<T>(scaffold: WebScaffold, method: string, request: unknown): Promise<RpcResult<T>> {
+  return await remote<T>(scaffold, `session/${method}`, { request })
 }
 
 /** Poll a synchronous condition (hook-safe; expect.poll is test-body only). */
@@ -70,7 +71,7 @@ function textCompletion(text: string): object {
   }
 }
 
-describe.skipIf(MODE === 'record')('web e2e: subagents/interruptByParent over the real composition', () => {
+describe.skipIf(MODE === 'record')('web e2e: subagents/interruptByUser over the real composition', () => {
   let scaffold: WebScaffold
   let sidecarRoot: string
   let readyFile: string
@@ -104,15 +105,16 @@ describe.skipIf(MODE === 'record')('web e2e: subagents/interruptByParent over th
       cwd: scaffold.workspaceCwd,
     })
     if (!created.ok) throw new Error(`session.create failed: ${created.error.code}`)
-    parentId = sessionId(created.value.sessionId)
+    parentId = brandString<sessionId>(created.value.sessionId)
     const parent = scaffold.ctx.agents.get(parentId)
     if (parent === undefined) throw new Error('created parent session did not publish a live Agent')
 
-    const started = await scaffold.ctx.subagents.startContinuable({
+    const started = await scaffold.ctx.subagents.startActivation({
+      delivery: 'parent',
       provider: 'spawn',
       label: 'event-sourcing researcher',
       signal: new AbortController().signal,
-      request: { prompt: [{ type: 'text', text: INITIAL }], parent },
+      prompt: [{ type: 'text', text: INITIAL }], parent,
     })
     childId = started.childId
     // The hang entry writes readyFile after its prefix chunks, immediately
@@ -133,19 +135,16 @@ describe.skipIf(MODE === 'record')('web e2e: subagents/interruptByParent over th
     const queued = await remote<{ messageId: string }>(scaffold, 'subagents/prompt', {
       request: {
         requestId: randomUUID(),
-        parentSessionId: parentId,
         childSessionId: childId,
-        mode: 'continuable',
+        delivery: 'queue',
         content: [{ type: 'text', text: FOLLOWUP }],
       },
     })
     expect(queued).toMatchObject({ ok: true })
 
     const settled = scaffold.whenTurnSettled()
-    const interrupted = await remote<{ accepted: true }>(scaffold, 'subagents/interruptByParent', {
+    const interrupted = await remote<{ accepted: true }>(scaffold, 'subagents/interruptByUser', {
       childSessionId: childId,
-      parentSessionId: parentId,
-      mode: 'continuable',
     })
     expect(interrupted).toMatchObject({ ok: true, value: { accepted: true } })
     // accepted acknowledges the admitted cancel, not quiescence: wait for the
@@ -158,8 +157,8 @@ describe.skipIf(MODE === 'record')('web e2e: subagents/interruptByParent over th
     expect(child).toBeDefined()
     expect(child!.status).toBe('idle')
     expect(child!.inbox.nextTurn).toHaveLength(1)
-    expect(child!.session.events.filter(event => event.type === 'turn/start')).toHaveLength(1)
-    const lastEnd = child!.session.events.filter(event => event.type === 'turn/end').at(-1)
+    expect(child!.session.snapshotEvents().filter(event => event.type === 'turn/start')).toHaveLength(1)
+    const lastEnd = child!.session.snapshotEvents().filter(event => event.type === 'turn/end').at(-1)
     expect((lastEnd)?.data.reason.kind).toBe('aborted')
 
     // Only an explicit waking send resumes the parked queue, FIFO, then the
@@ -167,24 +166,27 @@ describe.skipIf(MODE === 'record')('web e2e: subagents/interruptByParent over th
     const waking = await remote<{ messageId: string }>(scaffold, 'subagents/prompt', {
       request: {
         requestId: randomUUID(),
-        parentSessionId: parentId,
         childSessionId: childId,
-        mode: 'continuable',
+        delivery: 'queue',
         content: [{ type: 'text', text: WAKING }],
       },
     })
     expect(waking).toMatchObject({ ok: true })
     await expect.poll(() => scaffold.ctx.agents.get(childId), { timeout: 60_000 }).toBeUndefined()
 
-    const loaded = await scaffold.ctx.sessionPersistence.load(childId)
+    // The settled child's loop appended every turn's closing events durably,
+    // so the physical log carries the complete record asserted here.
+    const events = await readPersistedEvents(scaffold, childId)
     // Human-origin messages only: the real composition also injects
     // runtime-context snapshots as non-user-source messages.
-    const userTexts = loaded.events.flatMap(event => event.type === 'user/message'
+    const userTexts = events.flatMap(event => event.type === 'user/message'
       && event.data.source.kind === 'user'
       ? event.data.content.flatMap(block => block.type === 'text' ? [block.text] : [])
       : [])
-    expect(userTexts).toEqual([INITIAL, FOLLOWUP, WAKING])
-    const turnEndKinds = loaded.events
+    expect(userTexts[0]).toBe(INITIAL)
+    expect(userTexts[1]).toMatch(/^Your final answer is delivered automatically if your parent is still online\./)
+    expect(userTexts.slice(2)).toEqual([FOLLOWUP, WAKING])
+    const turnEndKinds = events
       .filter(event => event.type === 'turn/end')
       .map(event => (event).data.reason.kind)
     expect(turnEndKinds).toEqual(['aborted', 'completed', 'completed'])

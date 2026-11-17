@@ -6,6 +6,7 @@ import WebSocket from 'ws'
 import { ClientInspectorSource } from '../../src/client/bridge/transport.ts'
 import { ClientSourceCatalog } from '../../src/client/cdp/sources.ts'
 import { publishCordisTree } from '../../src/client/inspection/cordis.ts'
+import { maxStatePayloadBytes } from '../../src/shared/bridge/buffer.ts'
 import { inspectorId } from '../../src/shared/bridge/ids.ts'
 import type { InspectorClientBootstrap } from '../../src/shared/bridge/messages/control.ts'
 import type { InspectorJsonValue } from '../../src/shared/json.ts'
@@ -35,6 +36,8 @@ interface ClientFixtureRequest {
     | 'refresh-tree'
     | 'remove-fiber'
     | 'set-global'
+    | 'set-ingest-paused'
+  readonly paused?: boolean
   readonly name?: string
   readonly value?: InspectorJsonValue
   readonly marker?: string
@@ -67,7 +70,7 @@ const sourceCatalog = input.sourceCatalog === undefined
 const source = new ClientInspectorSource(input.bootstrap, input.label, sourceCatalog)
 const disposeCordis = publishCordisTree(context, source, {
   maxNodes: input.bootstrap.maxCordisNodes,
-  maxBytes: input.bootstrap.maxFrameBytes - 4_096,
+  maxBytes: maxStatePayloadBytes(input.bootstrap.maxFrameBytes),
 })
 const service = createInspectorService(source)
 let addedFiber: Fiber | undefined
@@ -106,6 +109,13 @@ async function dispatch(message: ClientFixtureRequest): Promise<unknown> {
       return undefined
     case 'get-tree':
       return await service.cordis.getTree()
+    case 'set-ingest-paused': {
+      const socket = Reflect.get(source, 'socket') as WebSocket | undefined
+      if (socket === undefined) throw new Error('Inspector Client ingest socket is unavailable')
+      if (message.paused) socket.pause()
+      else socket.resume()
+      return undefined
+    }
     case 'disconnect': {
       const socket = Reflect.get(source, 'socket') as WebSocket | undefined
       socket?.terminate()

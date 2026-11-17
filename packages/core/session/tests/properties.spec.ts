@@ -9,8 +9,9 @@
 
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
-import { createUserMessage, ToolCallId , createMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import { createUserMessage, type ToolCallId , createMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
+import { Session, type SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEventMap, SessionEventType, SurfaceIntent } from '@deepseek-ai/dsh-session'
 
 // Each arbitrary supplies its own surface intent; `build` must not synthesize
@@ -35,6 +36,7 @@ const messageEventArb: fc.Arbitrary<Appendable> = fc.oneof(
     data: {
       turn: 1,
       step: 1,
+      stream: [],
       message: createMessage({
         role: 'assistant',
         content,
@@ -48,6 +50,7 @@ const messageEventArb: fc.Arbitrary<Appendable> = fc.oneof(
     data: {
       turn: 1,
       step: 1,
+      stream: [],
       message: createMessage({
         role: 'assistant',
         content,
@@ -61,7 +64,7 @@ const messageEventArb: fc.Arbitrary<Appendable> = fc.oneof(
     .map((r): Appendable => ({ type: 'tool/result', data: {
       turn: 1, step: 1,
       message: createToolResultMessage({
-        callId: ToolCallId(r.id),
+        callId: brandString<ToolCallId>(r.id),
         content: r.content,
         isError: r.isError,
       }),
@@ -74,7 +77,10 @@ const nonMessageEventArb: fc.Arbitrary<Appendable> = fc.oneof(
   fc.constant<Appendable>({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } }),
   fc.constant<Appendable>({ type: 'step/start', data: { turn: 1, step: 1 } }),
   fc.constant<Appendable>({ type: 'step/end', data: { turn: 1, step: 1 } }),
-  fc.string().map((text): Appendable => ({ type: 'assistant/chunk', data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text } } })),
+  fc.string().map((text): Appendable => ({
+    type: 'assistant/attempt',
+    data: { turn: 1, step: 1, stream: [{ type: 'text-chunks', time0: 1, index: 0, dt: [], texts: [text] }] },
+  })),
 )
 
 const anyEventArb = fc.oneof(messageEventArb, nonMessageEventArb)
@@ -82,7 +88,7 @@ const logArb = fc.array(anyEventArb, { maxLength: 25 })
 
 let counter = 0
 function build(events: Appendable[]): Session {
-  const session = Session.create(SessionId(`prop-${counter++}`))
+  const session = Session.create(brandString<SessionId>(`prop-${counter++}`))
   for (const e of events) {
     // Forward the generated intent verbatim; non-surface events carry none.
     if (e.intent !== undefined) session.append(e.type, e.data, e.intent)
@@ -102,7 +108,7 @@ describe('Session properties', () => {
   it('seq is strictly monotonic and zero-based contiguous', () => {
     fc.assert(fc.property(logArb, (events) => {
       const session = build(events)
-      session.events.forEach((event, i) => { expect(event.seq).toBe(i) })
+      session.snapshotEvents().forEach((event, i) => { expect(event.seq).toBe(i) })
       expect(session.seq).toBe(events.length)
     }))
   })
@@ -110,10 +116,10 @@ describe('Session properties', () => {
   it('replay-from-seed reproduces the derivation identically', () => {
     fc.assert(fc.property(logArb, (events) => {
       const original = build(events)
-      const replayed = Session.create(SessionId(`replay-${counter++}`), [...original.events])
+      const replayed = Session.create(brandString<SessionId>(`replay-${counter++}`), original.snapshotEvents())
       expect(replayed.deriveMessages()).toEqual(original.deriveMessages())
       // Every explicit replay grows by exactly one log-only boundary.
-      expect(replayed.events.slice(0, original.seq)).toEqual(original.events)
+      expect(replayed.snapshotEvents().slice(0, original.seq)).toEqual(original.snapshotEvents())
       expect(replayed.seq).toBe(original.seq + 1)
     }))
   })
@@ -121,10 +127,10 @@ describe('Session properties', () => {
   it('replaying a log that already ends in end-seed adds no further marker', () => {
     fc.assert(fc.property(logArb, (events) => {
       const original = build(events)
-      const once = Session.create(SessionId(`idem-a-${counter++}`), [...original.events])
-      const twice = Session.create(SessionId(`idem-b-${counter++}`), [...once.events])
+      const once = Session.create(brandString<SessionId>(`idem-a-${counter++}`), original.snapshotEvents())
+      const twice = Session.create(brandString<SessionId>(`idem-b-${counter++}`), once.snapshotEvents())
       // Lazy resume makes browsing a pickup, so this must not grow per open.
-      expect(twice.events).toEqual(once.events)
+      expect(twice.snapshotEvents()).toEqual(once.snapshotEvents())
     }))
   })
 
@@ -157,15 +163,15 @@ describe('Session properties', () => {
     fc.assert(fc.property(logArb, (events) => {
       const session = build(events)
       const messages = session.deriveMessages()
-      const before = structuredClone(session.events)
+      const before = structuredClone(session.snapshotEvents())
       for (const m of messages) {
-        expect(['user', 'assistant', 'system']).toContain(m.role)
+        expect(['user', 'assistant', 'system', 'tool']).toContain(m.role)
         // Derived messages are frozen shared projections: mutation THROWS
         // (strict mode) instead of relying on per-call clones for isolation.
         expect(Object.isFrozen(m)).toBe(true)
-        expect(() => { m.content.push({ type: 'text', text: 'mutation' }) }).toThrow(TypeError)
+        expect(() => { (m.content as unknown as { type: string; text?: string }[]).push({ type: 'text', text: 'mutation' }) }).toThrow(TypeError)
       }
-      expect(session.events).toEqual(before)
+      expect(session.snapshotEvents()).toEqual(before)
     }))
   })
 })

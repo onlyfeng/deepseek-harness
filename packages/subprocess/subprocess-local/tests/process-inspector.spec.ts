@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   createProcessInspector,
-  linuxProcessGroupHasLiveMembers,
+  linuxProcessGroupLiveMember,
   parseProcStat,
 } from '@deepseek-ai/dsh-subprocess-local/src/process-inspector.ts'
 import type { ProcessInspectorInternals } from '@deepseek-ai/dsh-subprocess-local/src/process-inspector.ts'
@@ -89,19 +89,66 @@ function fakeInternals() {
 }
 
 describe('Linux process inspector', () => {
+  it.each(['EACCES', 'EMFILE'])('refuses to publish an empty snapshot when /proc enumeration fails with %s', (code) => {
+    const fake = fakeInternals()
+    const readDir = fake.internals.readDir.bind(fake.internals)
+    fake.internals.readDir = () => { throw Object.assign(new Error('Enumeration failed'), { code }) }
+    const inspector = createProcessInspector('linux', 'x64', fake.internals)
+    expect(() => inspector.snapshot()).toThrow('/proc directory is unreadable')
+    fake.internals.readDir = readDir
+    fake.dirs.set('/proc', ['10'])
+    fake.files.set('/proc/10/stat', stat(10, 10, 10, 10, '500'))
+    expect(inspector.snapshot().complete).toBe(true)
+    expect(inspector.snapshot().tree(10)).toEqual([{ pid: 10, started: '500' }])
+  })
+
+  it('makes no stdin-wait claim when process or task directories cannot be enumerated', () => {
+    const fake = fakeInternals()
+    fake.files.set('/proc/10/stat', stat(10, 10, 10, 10, '500'))
+    fake.links.set('/proc/10/fd/0', '/dev/pts/1')
+    fake.devices.set('/proc/10/fd/0', { character: true, rdev: 99 })
+    const inspector = createProcessInspector('linux', 'x64', fake.internals)
+    expect(inspector.isStdinWaiting(10, 10)).toBe(false)
+    fake.dirs.set('/proc', ['10'])
+    expect(inspector.isStdinWaiting(10, 10)).toBe(false)
+  })
+
   it('treats zombie-only process groups as quiescent and fails closed when unobservable', () => {
     const fake = fakeInternals()
-    expect(linuxProcessGroupHasLiveMembers(77, fake.internals)).toBeUndefined()
+    expect(linuxProcessGroupLiveMember(77, undefined, fake.internals)).toBeUndefined()
 
     fake.dirs.set('/proc', ['self', '10', '11', '12'])
     fake.files.set('/proc/10/stat', stat(10, 77, 10, -1, '500', 1, 'Z'))
     fake.files.set('/proc/11/stat', stat(11, 77, 10, -1, '501', 1, 'X'))
     fake.files.set('/proc/12/stat', stat(12, 88, 12, -1, '502'))
-    expect(linuxProcessGroupHasLiveMembers(77, fake.internals)).toBe(false)
-    expect(linuxProcessGroupHasLiveMembers(99, fake.internals)).toBeUndefined()
+    expect(linuxProcessGroupLiveMember(77, undefined, fake.internals)).toBe(false)
+    expect(linuxProcessGroupLiveMember(99, undefined, fake.internals)).toBeUndefined()
 
     fake.files.set('/proc/11/stat', stat(11, 77, 10, -1, '501'))
-    expect(linuxProcessGroupHasLiveMembers(77, fake.internals)).toBe(true)
+    expect(linuxProcessGroupLiveMember(77, undefined, fake.internals)).toBe(11)
+  })
+
+  it('rechecks a known live group member without enumerating /proc', () => {
+    const fake = fakeInternals()
+    let scans = 0
+    fake.internals.readDir = (path) => {
+      scans += 1
+      return fake.dirs.get(path) ?? []
+    }
+    fake.dirs.set('/proc', ['10', '11', '12'])
+    fake.files.set('/proc/10/stat', stat(10, 77, 10, -1, '500', 1, 'Z'))
+    fake.files.set('/proc/11/stat', stat(11, 77, 10, -1, '501'))
+    fake.files.set('/proc/12/stat', stat(12, 77, 10, -1, '502'))
+    expect(linuxProcessGroupLiveMember(77, 11, fake.internals)).toBe(11)
+    expect(scans).toBe(0)
+
+    fake.files.set('/proc/11/stat', stat(11, 77, 10, -1, '501', 1, 'Z'))
+    expect(linuxProcessGroupLiveMember(77, 11, fake.internals)).toBe(12)
+    fake.files.set('/proc/12/stat', stat(12, 88, 12, -1, '502'))
+    expect(linuxProcessGroupLiveMember(77, 12, fake.internals)).toBe(false)
+    fake.files.delete('/proc/12/stat')
+    expect(linuxProcessGroupLiveMember(77, 12, fake.internals)).toBe(false)
+    expect(scans).toBe(3)
   })
 
   it('parses stat safely, captures only the rooted process tree, and signals identities', () => {

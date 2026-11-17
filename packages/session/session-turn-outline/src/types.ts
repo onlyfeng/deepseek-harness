@@ -7,6 +7,9 @@
  * @module @deepseek-ai/dsh-session-turn-outline/types
  */
 
+import type { SessionSeq } from '@deepseek-ai/dsh-session/types'
+import type { SessionProjectionSummaryExcluded } from '@deepseek-ai/dsh-session-projection/types'
+
 export {}
 
 /** One started turn's outline facts, independent of what a client has paged in. */
@@ -14,7 +17,7 @@ export interface TurnOutlineEntry {
   /** Host-assigned turn number (the `turn/start` payload). */
   readonly turn: number
   /** The turn's `turn/start` event seq — paging a window back through this seq loads the whole turn. */
-  readonly seq: number
+  readonly seq: SessionSeq
   /** Bounded first-human-prompt preview (one rail-card line); `''` until an eligible prompt lands. */
   readonly prompt: string
   /** Bounded final-response preview (up to three rail-card lines); `''` until the turn ends with assistant text. */
@@ -36,12 +39,13 @@ export interface TurnOutlineState {
 }
 
 declare module '@deepseek-ai/dsh-session-projection/types' {
-  interface SessionProjectionStateMap {
-    /** Whole-log turn outline fold state (entries plus the open turn's response draft). */
-    turnOutline: TurnOutlineState
-  }
   interface SessionProjectionMap {
-    /** Every started turn with its `turn/start` seq and bounded previews, strictly increasing by turn; see {@link TurnOutlineEntry}. */
-    turnOutline: readonly TurnOutlineEntry[]
+    /**
+     * Every started turn with its `turn/start` seq and bounded previews,
+     * strictly increasing by turn; see {@link TurnOutlineEntry}. Excluded from
+     * Session summary payloads: the outline grows with the whole log and no
+     * list row renders it.
+     */
+    turnOutline: SessionProjectionSummaryExcluded<readonly TurnOutlineEntry[]>
   }
 }

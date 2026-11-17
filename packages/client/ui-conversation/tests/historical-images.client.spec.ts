@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
-import { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import type { AttachmentId } from '@deepseek-ai/dsh-attachment/types'
+import { brandString } from '@deepseek-ai/dsh-brand'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import { RemoteError, SlotTestRuntime } from '@deepseek-ai/dsh-client-test-runtime'
 import { HistoricalImageCache } from '../src/client/conversation/historical-images.ts'
@@ -9,17 +10,22 @@ describe('HistoricalImageCache', () => {
   it('invalidates a pending image load when its Session binding is released', async () => {
     const read = Promise.withResolvers<Awaited<ReturnType<SessionFace['readAttachment']>>>()
     const runtime = await SlotTestRuntime.create()
+    const load = vi.fn(() => read.promise)
     const sessionId = await runtime.sessions.add({
       id: 's1',
-      session: { readAttachment: () => read.promise },
+      session: { readAttachment: load },
     })
+    const reference = runtime.sessions.retain(sessionId)
+    await reference.ready
     const cache = new HistoricalImageCache(runtime.ctx, runtime.ctx.sessions)
     const attachment = {
-      attachmentId: AttachmentId('image-1'), mediaType: 'image/png', bytes: 1, width: 1, height: 1,
+      attachmentId: brandString<AttachmentId>('image-1'), mediaType: 'image/png', bytes: 1, width: 1, height: 1,
     } as const
 
     const pending = cache.resolve(sessionId, attachment)
-    await runtime.sessions.remove(sessionId)
+    expect(load).toHaveBeenCalledExactlyOnceWith(attachment)
+    reference.release()
+    await runtime.flush()
     read.resolve({ ok: true, value: { attachment, data: Uint8Array.of(1) } })
 
     await expect(pending).rejects.toThrow('ui-conversation image scope was released before loading completed')
@@ -35,9 +41,11 @@ describe('HistoricalImageCache', () => {
       const read = Promise.withResolvers<Awaited<ReturnType<SessionFace['readAttachment']>>>()
       const runtime = await SlotTestRuntime.create()
       const sessionId = await runtime.sessions.add({ id: 's1', session: { readAttachment: () => read.promise } })
+      const reference = runtime.sessions.retain(sessionId)
+      await reference.ready
       const cache = new HistoricalImageCache(runtime.ctx, runtime.ctx.sessions)
       const attachment = {
-        attachmentId: AttachmentId('image-seeded'), mediaType: 'image/png', bytes: 1, width: 1, height: 1,
+        attachmentId: brandString<AttachmentId>('image-seeded'), mediaType: 'image/png', bytes: 1, width: 1, height: 1,
       } as const
 
       expect(cache.seed(sessionId, attachment, 'blob:seeded')).toBe(true)
@@ -49,8 +57,8 @@ describe('HistoricalImageCache', () => {
       expect(cache.peek(sessionId, attachment)).toBe('blob:canonical')
       expect(revoked).toContain('blob:seeded')
 
-      await runtime.sessions.remove(sessionId)
-      await Promise.resolve()
+      reference.release()
+      await runtime.flush()
       expect(revoked).toContain('blob:canonical')
       await runtime.dispose()
     } finally {
@@ -72,15 +80,18 @@ describe('HistoricalImageCache', () => {
           } as never),
         },
       })
+      const reference = runtime.sessions.retain(sessionId)
+      await reference.ready
       const cache = new HistoricalImageCache(runtime.ctx, runtime.ctx.sessions)
       const attachment = {
-        attachmentId: AttachmentId('image-missing'), mediaType: 'image/png', bytes: 1, width: 1, height: 1,
+        attachmentId: brandString<AttachmentId>('image-missing'), mediaType: 'image/png', bytes: 1, width: 1, height: 1,
       } as const
 
       expect(cache.seed(sessionId, attachment, 'blob:seeded')).toBe(true)
       await expect(cache.resolve(sessionId, attachment)).rejects.toThrow('attachment-invalid: missing')
       expect(cache.peek(sessionId, attachment)).toBeUndefined()
       expect(revoked).toHaveBeenCalledWith('blob:seeded')
+      reference.release()
       await runtime.dispose()
     } finally {
       revoked.mockRestore()
@@ -91,7 +102,7 @@ describe('HistoricalImageCache', () => {
     const runtime = await SlotTestRuntime.create()
     const cache = new HistoricalImageCache(runtime.ctx, runtime.ctx.sessions)
     const attachment = {
-      attachmentId: AttachmentId('image-unknown'), mediaType: 'image/png', bytes: 1, width: 1, height: 1,
+      attachmentId: brandString<AttachmentId>('image-unknown'), mediaType: 'image/png', bytes: 1, width: 1, height: 1,
     } as const
     expect(cache.seed('missing' as never, attachment, 'blob:orphan')).toBe(false)
     await runtime.dispose()

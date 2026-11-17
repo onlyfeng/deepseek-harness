@@ -8,8 +8,9 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
-import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { type SessionId } from '@deepseek-ai/dsh-session'
 import * as SessionLogDownload from '@deepseek-ai/dsh-session-log-export'
+import { brandString } from '@deepseek-ai/dsh-brand'
 
 let root: string | undefined
 let context: Context | undefined
@@ -57,15 +58,16 @@ describe('session-log-download real Loader composition', () => {
     })
     await context.loader.await()
 
-    const session = (context.get('sessions') as unknown as SessionStore)
-      .create(SessionId('loader-session-export'), { meta: { createdAt: 1 } })
+    const session = (context.get('sessions') as SessionStore)
+      .create(brandString<SessionId>('loader-session-export'), { meta: { createdAt: 1 } })
     const agent = { session, status: 'idle', options: {} } as unknown as Agent
     expect(context.commands.list(agent)).toContainEqual({
+      definitionId: '@deepseek-ai/dsh-session-log-export',
       name: 'export', description: 'Download this Session log as a ZIP archive',
     })
     const execution = await context.commands.execute(agent, '/export', [], new AbortController().signal)
     expect(execution?.result).toEqual({ kind: 'success', text: 'Session log download requested.' })
-    expect(session.events.map(event => event.type)).toEqual(['command/run', 'command/done'])
+    expect(session.snapshotEvents().map(event => event.type)).toEqual(['command/run', 'command/done'])
     expect(session.deriveMessages()).toEqual([])
   })
 })

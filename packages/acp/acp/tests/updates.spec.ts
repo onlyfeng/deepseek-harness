@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import { ToolCallId, MessageId } from '@deepseek-ai/dsh-llm'
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import type { ToolCallId, MessageId } from '@deepseek-ai/dsh-llm'
+import { SessionSeq, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { assistantUpdates, toolCallUpdate, toolResultUpdate } from '../src/updates.ts'
 
 /** Minimal committed assistant event for pure update projection tests. */
@@ -11,13 +12,15 @@ function assistantEvent(
 ): SessionEvent<'assistant/message'> {
   return {
     type: 'assistant/message',
-    seq: 0,
+    surfaceOp: 'append',
+    seq: SessionSeq(0),
     time: 0,
     data: {
+      stream: [],
       turn: 1,
       step: 1,
       message: {
-        id: MessageId('message-1'),
+        id: brandString<MessageId>('message-1'),
         role: 'assistant',
         source: { kind: 'model', provider: 'mock', model: 'mock' },
         content,
@@ -33,7 +36,7 @@ describe('standard ACP update projection', () => {
     const session = { requestContext: () => undefined } as unknown as Session
     const event = assistantEvent([
       { type: 'reasoning', text: '' },
-      { type: 'tool-call', id: ToolCallId('call-hidden'), name: 'hidden', arguments: '{}' },
+      { type: 'tool-call', id: brandString<ToolCallId>('call-hidden'), name: 'hidden', arguments: '{}' },
     ])
 
     await expect(assistantUpdates(ctx, session, event)).resolves.toEqual([])
@@ -57,27 +60,25 @@ describe('standard ACP update projection', () => {
   it('preserves malformed tool input and projects a failed result without hidden content', async () => {
     const call = toolCallUpdate({
       type: 'tool/call',
-      seq: 0,
+      seq: SessionSeq(0),
       time: 0,
-      data: { turn: 1, step: 1, callId: ToolCallId('call-bad'), name: 'broken', arguments: '{' },
+      data: { turn: 1, step: 1, callId: brandString<ToolCallId>('call-bad'), name: 'broken', arguments: '{' },
     })
     const result = await toolResultUpdate({ get: () => undefined } as unknown as Context, {
       type: 'tool/result',
-      seq: 0,
+      surfaceOp: 'append',
+      seq: SessionSeq(0),
       time: 0,
       data: {
         turn: 1,
         step: 1,
         message: {
-          id: MessageId('tool-message'),
-          role: 'user',
-          source: { kind: 'tool', callId: ToolCallId('call-bad') },
-          content: [{
-            type: 'tool-result',
-            toolCallId: ToolCallId('call-bad'),
-            isError: true,
-            content: [{ type: 'reasoning', text: 'hidden' }],
-          }],
+          id: brandString<MessageId>('tool-message'),
+          role: 'tool',
+          toolCallId: brandString<ToolCallId>('call-bad'),
+          isError: true,
+          source: { kind: 'tool', callId: brandString<ToolCallId>('call-bad') },
+          content: [{ type: 'reasoning', text: 'hidden' }],
         },
       },
     })

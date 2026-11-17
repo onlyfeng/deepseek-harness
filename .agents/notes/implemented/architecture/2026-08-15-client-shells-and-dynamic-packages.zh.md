@@ -21,18 +21,18 @@ Client npm 依赖区段描述安装和开发关系，但不能可靠描述 bundl
 | 层 | 成员 | 职责 | 构建与加载形态 |
 | --- | --- | --- | --- |
 | Web 编译壳 | `apps/web` | 拥有 `index.html`、Vite 配置、dist chunk 和静态资源 | 从已构建 package export 组装最终浏览器产物 |
-| 启动内核 | `packages/client/web` | 拥有纯 DOM 启动页、模块系统接线、Cordis settle 和 renderer handoff | `staticLinked` `lib/index.js`；无 `dsh.client` row |
-| 静态装配库 | Cordis、`ui-primitives`、`ui-slots` | 提供共享模块身份和直接实体 API | ESM `lib/index.js`，由 Vite 合并拆分；不是 Loader entry |
+| 启动内核 | `packages/client/web` | 拥有纯 DOM 启动页、模块系统接线、Cordis settle 和 renderer handoff | `clientShell` ESM 入口；无 `dsh.client` row |
+| 静态装配库 | Cordis、`ui-primitives`、`ui-slots` | 提供共享模块身份和直接实体 API | Manifest `lib/index.js`，共享 import 由 Vite 组装；不是 Loader entry |
 | 模块自举包 | `packages/client/modules` | 提供 client 模块表及其 Cordis wrapper | 带一个普通 `lib/client.js` 的动态包；host 提前送达其 factory |
 | 动态 client 包 | connection、`ui-renderer`、主题和功能插件 | 通过 Cordis service、slot 和 effect 参与应用 | 声明 `dsh.client`，产出自注册 `lib/client.js`，并保留 host graph entry |
 
 `packages/client/web` 把 Cordis 保持为 matching peer 与开发依赖，并把 modules 和静态 UI 包作为开发期编译输入。`apps/web` 消费已构建 package export，不通过 alias 读取 workspace 源码。
 
-`staticLinked` 预设让 `lib/index.js` 中每个 bare specifier 保持 external import，并在旁边输出相对 CSS 资产。Vite 宿主负责解析和去重这些 import，并决定最终 chunk 边界。静态库不会把宿主打包策略复制进自身产物。
+`staticLinked` 预设把 `lib/index.js` 输出为普通 ESM，保留所有裸 import 与动态 import 交给 Vite 解析、去重和拆分，并增加一个导出 `__$dsh_client_module_manifest`，其 factory 返回库自身的导出。让 factory 推迟执行库本体并没有实际收益：第三方 import 在模块加载时已经求值，外壳也在启动时登记这些库。CSS import 成为延迟求值的元信息资源。[模块元信息决定](2026-11-05-client-module-metadata.zh.md)定义资源所有权；静态库不采用动态插件的私有依赖打包策略。
 
 ### 共享模块请求
 
-动态浏览器 bundle 会隐式 external 统一基座：`PLATFORM_MODULES` 命名由外壳播种的 React、Cordis 和静态 UI 身份，`PRELOADED_CLIENT_EXTERNALS` 则为必须先于 shell 启动到达的动态身份预留，当前为空。包只在精确请求基座外实体时使用 `dsh.client.external`。纯类型 import 会被擦除，不产生请求；允许的第三方实现库保留为 bundle 私有内容。
+动态浏览器 bundle 会隐式 external 统一基座：`PLATFORM_MODULES` 命名由外壳播种的 React、Cordis、选定的第三方库和静态 UI 身份，`PRELOADED_CLIENT_EXTERNALS` 则为必须先于 shell 启动到达的动态身份预留，当前为空。包只在精确请求基座外实体时使用 `dsh.client.external`。纯类型 import 会被擦除，不产生请求；基座外的第三方实现库保留为 bundle 私有内容。共享第三方库使用外壳声明的版本，不为单个插件协商版本；只有测量确认外壳与随包插件 bundle 的总体积减少，才将库纳入基座。
 
 请求只有两种提供方：
 
@@ -46,12 +46,16 @@ Client npm 依赖区段描述安装和开发关系，但不能可靠描述 bundl
 Modules Node 半按以下顺序向实际返回的 HTML 注入启动协议：
 
 1. 以 queue 模式安装 `window.__ModuleLoader__`，包含 `pendingQueue`、`load()` 与 `create()`。
-2. 开始预加载所有按内容寻址的 application combo URL，其中包含 modules 之外的 row。
+2. 开始预加载所有带 revision 的 application combo URL，其中包含 modules 之外的 row。
 3. 执行所有阻塞式 bootstrap combo URL；当前其中包含普通的 modules factory registration。
 4. 赋值 `window.__DSH_BOOT__`，其中包含全部调度描述及每个 row 的单资源 HMR combo URL。
 5. 执行 Vite 主模块。
 
-Bootstrap combo 当前只登记 modules factory。启动内核把原始图与外壳 seed 传给 `__ModuleLoader__.create()`。Facade 移除 modules registration，用拒绝全部 external 的 `require` 函数将其物化，再调用其 `createClientModuleSystem` 导出。Modules bundle 解析图、构造 `ClientModuleSystem`、把自身 exports 缓存为 modules row、在模块闭包中保留该系统，并把同一 facade 切换到 live 模式。因此 modules client face 必须满足零 external 的自举要求。
+Bootstrap combo 当前只登记 modules factory。启动内核把原始图与外壳 seed 传给 `__ModuleLoader__.create()`。Facade 移除 modules registration，用拒绝全部 external 的 `require` 函数将其物化，再调用其 `createClientModuleSystem` 导出。Modules bundle 解析图、构造并返回 `ClientModuleSystem`、把自身 exports 缓存为 modules row，并把同一 facade 切换到 live 模式。内核把该实例装成自身 Loader 的 `internal`，modules 插件从这里读取并提供 `ctx.modules`。因此 modules client face 保持零 external 的自举要求，也没有模块级系统身份。
+
+Host 发布 graph 与 combo descriptor 时不会拼接响应 body。每个脚本 URL 共用一个惰性 Promise，在首次 `GET` 时拼接捕获的 bundle 字节并追加对应的 map URL；每个 map URL 使用另一个惰性 Promise，只在首次 `GET` 时读取并组合 source map。`HEAD` 不触发任一 body。Web URL 仍由 Loader 结算和 required-entry audit 控制，但这个就绪点不会物化 combo body；index 请求读取当时的最新 graph。
+
+Theme 的 Host 贡献会前置到 index 收集顺序。head 中的 CSS 选择初始文档画布调色板，`system` 偏好直接使用 `prefers-color-scheme`；body 脚本在加载页面和应用模块之前应用既有的调色板属性与字号变量。
 
 `immediately` 层级完成 factory 注册后，内核创建全部 Loader entry，等待 Cordis 静止，并要求每个 fiber 都进入 ACTIVE。随后调用 `ctx.uiRenderer.mount(container)`。动态 `ui-renderer` 包拥有 React、slot 渲染、已有启动 DOM 的 hydrate 和 React root 生命周期；启动内核与失败页保持 React-free。
 
@@ -79,7 +83,7 @@ Bootstrap combo 当前只登记 modules factory。启动内核把原始图与外
 
 内部 DSH 关系仅放在开发区段时，bundle 内容仍保持稳定，因为每个构建 face 都直接声明 external。静态库继续由宿主装配，动态包则保留统一产物与生命周期治理。发布 profile 拥有完整 Client 包名册，因此各 Client 包不再要求 npm 通过 peer placement 重复求解同一张图。
 
-启动协议依赖 modules 的 package id，modules 还必须保持运行期自包含。Combo 生成保留其普通 package 产物，并为其他全部 row 提供一条共享初始传输；HMR 使用同一条路由，并只把该 row 作为资源。缺少 bootstrap registration 会在 Cordis 启动前失败；后续插件 import、apply 与 service 等待失败仍由启动页的 ACTIVE 扫描呈现。
+启动协议依赖 modules 的 package id，modules 还必须保持运行期自包含。Combo 生成保留其普通 package 产物，并为其他全部 row 提供一条共享初始传输；HMR 使用同一条路由，并只把该 row 作为资源。响应 body 的延迟生成会把拼接移到首次访问，而 map 的独立延迟生成会让仅供调试器使用的工作不进入脚本交付路径。缺少 bootstrap registration 会在 Cordis 启动前失败；后续插件 import、apply 与 service 等待失败仍由启动页的 ACTIVE 扫描呈现。
 
 外壳消费已构建 `lib/` 产品，因此在相关 build 或 watcher 运行前，源码与浏览器产物可能漂移。仅源码 typecheck 通过不能证明实际服务的应用使用同一份代码。
 

@@ -4,6 +4,8 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import type { CommandDefinitionId } from '@deepseek-ai/dsh-commands/types'
 import { ManualCompactionError } from '@deepseek-ai/dsh-compaction'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 
@@ -32,12 +34,12 @@ function expectedFailure(error: ManualCompactionError): CommandResult {
     case 'changed':
       return {
         kind: 'error',
-        text: 'The history selected for compaction changed before it could be replaced. The conversation is unchanged; the attempt is recorded in the session log.',
+        text: 'The history selected for compaction changed before it could be replaced. The attempt is recorded in the session log.',
       }
     case 'summary':
       return {
         kind: 'error',
-        text: 'Compaction could not produce a useful summary. The conversation is unchanged; the attempt is recorded in the session log.',
+        text: 'Compaction could not produce a useful summary. The attempt is recorded in the session log.',
       }
     case 'commit':
       return {
@@ -98,6 +100,7 @@ export function apply(ctx: Context): void {
     // invocation can enter while already-started handler promises quiesce.
     yield async () => { await Promise.allSettled(active) }
     yield ctx.commands.register({
+      definitionId: brandString<CommandDefinitionId>('@deepseek-ai/dsh-command-compact'),
       name: 'compact',
       description: 'Compact older conversation history',
       handler,

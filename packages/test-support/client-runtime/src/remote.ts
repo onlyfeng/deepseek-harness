@@ -1,5 +1,8 @@
-/** Test-owned Remote face: `$on` subscriptions with an explicit test event driver. */
+/** Test-owned Remote face: `$on` subscriptions with an explicit test event driver, and reconnecting streams. */
 import type { Context } from '@deepseek-ai/cordis'
+import { RemoteStream, type RemoteStreamOptions } from '@deepseek-ai/dsh-api-gateway/client'
+import type { ConnectionGeneration, ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 
 // Value re-export for spec-side failure construction: the api-remotes facade
 // cannot carry it — its src top-level imports owner /remote lib artifacts, so a
@@ -13,6 +16,8 @@ export { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
  * implements subscription plus an explicit `emit` driver available only on the
  * concrete test object. A spec that also calls one namespace scripts it through
  * the constructor rather than reaching the real Client Remote service.
+ * `$stream` wraps a scripted stream method in the production `RemoteStream`
+ * over one Host generation that never changes.
  *
  * `$mount` rejects: a spec that needs a real generated contribution installed —
  * codecs, descriptors, and the wire — has outgrown this double and needs the
@@ -25,6 +30,10 @@ export { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
  */
 export class TestRemote {
   private readonly subscriptions = new Map<string, Set<(...args: never[]) => void>>()
+  /** One always-available Host generation; the double never loses or replaces its carrier. */
+  private readonly connection: Pick<ConnectionHandle, 'generation'> = {
+    generation: createSnapshotStore<ConnectionGeneration | undefined>({ id: 1, host: { home: '/home/fixture' } }),
+  }
 
   /**
    * Fixed Host facts mirrored from the production `ctx.remote.$host`. Plain
@@ -38,17 +47,34 @@ export class TestRemote {
    * @param ctx - the spec's root Context.
    * @param namespaces - scripted namespace faces reached as `ctx.remote.<name>`.
    */
-  constructor(ctx: Context, namespaces: Readonly<Record<string, object>> = {}) {
+  constructor(private readonly ctx: Context, namespaces: Readonly<Record<string, object>> = {}) {
+    this.validateNamespaces(namespaces)
+    ctx.provide('remote', this)
+    this.installNamespaces(namespaces)
+  }
+
+  /**
+   * Add scripted namespace faces to this Remote service.
+   * @param namespaces - scripted namespace faces reached as `ctx.remote.<name>`.
+   */
+  provideNamespaces(namespaces: Readonly<Record<string, object>>): void {
+    this.validateNamespaces(namespaces)
+    this.installNamespaces(namespaces)
+  }
+
+  private validateNamespaces(namespaces: Readonly<Record<string, object>>): void {
     for (const name of Object.keys(namespaces)) {
       // A namespace named after one of the double's own members would replace
       // it, and `$mount`'s rejection is the contract a spec relies on.
-      if (name in TestRemote.prototype || name === 'subscriptions' || name === '$host') {
+      if (name in this) {
         throw new TypeError(`TestRemote: scripted namespace "${name}" would shadow the double's own member`)
       }
     }
+  }
+
+  private installNamespaces(namespaces: Readonly<Record<string, object>>): void {
     Object.assign(this, namespaces)
-    ctx.provide('remote', this)
-    for (const [name, face] of Object.entries(namespaces)) ctx.provide(`remote.${name}`, face)
+    for (const [name, face] of Object.entries(namespaces)) this.ctx.provide(`remote.${name}`, face)
   }
 
   /**
@@ -74,6 +100,16 @@ export class TestRemote {
     this.subscriptions.set(event, listeners)
     listeners.add(listener)
     return () => { listeners.delete(listener) }
+  }
+
+  /**
+   * Open one production `RemoteStream` over the double's always-available Host generation, so a plugin's stream
+   * lifecycle runs against a scripted namespace method.
+   * @param options - domain stream opener, end classification, and diagnostics.
+   * @returns the single-consumer reconnecting stream.
+   */
+  $stream<Item>(options: RemoteStreamOptions<Item>): RemoteStream<Item> {
+    return new RemoteStream(this.connection, options)
   }
 
   /**

@@ -4,7 +4,9 @@
     "rootDir": "src",
     "outDir": "lib/types"
   },
-  "include": ["src"],
+  "include": [
+    "src"
+  ],
   "references": [
     {
       "path": "../../../vendor/cosmokit"
@@ -22,10 +24,10 @@
       "path": "../../llm/llm"
     },
     {
-      "path": "../../util/values"
+      "path": "../../util/error"
     },
     {
-      "path": "../../runtime-diagnostics/invariants"
+      "path": "../../util/values"
     }
   ]
 }

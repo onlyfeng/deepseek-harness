@@ -7,6 +7,9 @@
   "include": ["src"],
   "references": [
     {
+      "path": "../../util/brand"
+    },
+    {
       "path": "../../../vendor/cosmokit"
     },
     {
@@ -17,9 +20,6 @@
     },
     {
       "path": "../spill"
-    },
-    {
-      "path": "../../runtime-diagnostics/invariants"
     }
   ]
 }

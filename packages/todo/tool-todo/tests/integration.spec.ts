@@ -1,13 +1,13 @@
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionId, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
-import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import * as ToolTodo from '@deepseek-ai/dsh-tool-todo'
 import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
+import { brandString } from '@deepseek-ai/dsh-brand'
 
 /**
  * Full-loop integration: a scripted mock model drives the REAL todo_write tool
@@ -18,7 +18,6 @@ import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent
 async function harness(adapter: MockAdapter): Promise<Context> {
   const ctx = new Context()
   await mountAgentLoopTestDependencies(ctx)
-  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(AgentLoop, { agents: [] })
   await ctx.plugin(ToolTodo, { allowParallelInProgress: true })
   ctx.llm.registerAdapter(['mock'], adapter)
@@ -60,14 +59,14 @@ describe('todo_write tool through the agent loop', () => {
       textResponse('Plan recorded.'),
     ])
     const ctx = await harness(adapter)
-    const agent = ctx.agentLoop.create(SessionId('it-todo'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(brandString<SessionId>('it-todo'), { provider: 'mock', model: 'mock' })
 
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'plan a two-step task' }], source: { kind: 'user' } }))
     await waitForIdle(ctx, agent)
 
-    const log = agent.session.events
+    const log = agent.session.snapshotEvents()
     expect(findEvent(log, 'tool/call').data.name).toBe('todo_write')
-    expect(findEvent(log, 'tool/result').data.message.content[0].isError).toBe(false)
+    expect(findEvent(log, 'tool/result').data.message.isError).toBe(false)
 
     const todoEvent = findEvent(log, 'todo/write')
     expect(todoEvent.data.todos).toEqual([
@@ -88,14 +87,14 @@ describe('todo_write tool through the agent loop', () => {
       textResponse('Done planning.'),
     ])
     const ctx = await harness(adapter)
-    const agent = ctx.agentLoop.create(SessionId('it-todo-2'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(brandString<SessionId>('it-todo-2'), { provider: 'mock', model: 'mock' })
 
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'plan then update' }], source: { kind: 'user' } }))
     await waitForIdle(ctx, agent)
 
-    const todoEvents = agent.session.events.filter(e => e.type === 'todo/write')
+    const todoEvents = agent.session.snapshotEvents().filter(e => e.type === 'todo/write')
     expect(todoEvents).toHaveLength(2)
-    expect(findEvent(agent.session.events, 'todo/write', 'last').data.todos).toEqual([
+    expect(findEvent(agent.session.snapshotEvents(), 'todo/write', 'last').data.todos).toEqual([
       { content: 'step one', status: 'completed' },
       { content: 'step two', status: 'in_progress' },
     ])

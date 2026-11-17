@@ -1,16 +1,25 @@
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import type { CompactionId } from '@deepseek-ai/dsh-compaction/types'
 import {
-  CompactionId,
   CompactionEngine,
   compactCheckpointSource,
   isCompactCheckpointSource,
 } from '@deepseek-ai/dsh-compaction'
 import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compaction'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, type SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { CompactionAgentContext } from '@deepseek-ai/dsh-compaction'
 import type { ManualCompactAgentContext } from '@deepseek-ai/dsh-compaction'
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'other': { kind: 'other' } & ContextFormed
+  }
+}
 
 /**
  * A trivial concrete CompactionEngine implementing the abstract contract. The
@@ -40,8 +49,8 @@ class StubCompactionEngine extends CompactionEngine {
   }
 
   override async compactRegion(
-    start: number,
-    end: number,
+    start: SessionSeq,
+    end: SessionSeq,
     agent: CompactionAgentContext,
     signal?: AbortSignal,
   ): Promise<CompactionResult> {
@@ -53,7 +62,7 @@ class StubCompactionEngine extends CompactionEngine {
     const endIndex = surface.indexOf(end)
     if (startIndex < 0 || endIndex < startIndex) throw new Error('stub compact range is invalid')
     const shadowedSeqs = surface.slice(startIndex, endIndex + 1)
-    const compactionId = CompactionId('stub-compaction')
+    const compactionId = brandString<CompactionId>('stub-compaction')
     // Minimal stub honoring the lock + log-only event contract.
     const startEvent = session.append('compaction/start', { compactionId, turn: 0 })
     const summaryEvent = session.append('compaction/summary', {
@@ -69,7 +78,7 @@ class StubCompactionEngine extends CompactionEngine {
       content: summary,
       source: compactCheckpointSource(compactionId),
     }), {
-      surfaceOp: { op: 'replace', start, end },
+      surfaceOp: { op: 'replace', startSeq: start, endSeq: end },
       sourceEventSeqs: [startEvent.seq, summaryEvent.seq, ...shadowedSeqs],
     })
     const endEvent = session.append('compaction/end', { compactionId, turn: 0 })
@@ -109,7 +118,7 @@ describe('CompactionEngine seam', () => {
   it('exposes the abstract contract methods', async () => {
     const ctx = new Context()
     const svc = new StubCompactionEngine(ctx)
-    const session = Session.create(SessionId('s'))
+    const session = Session.create(brandString<SessionId>('s'))
     expect(await svc.compactIfNeeded(stubAgent(session), 'pressure', new AbortController().signal)).toBeNull()
     const signal = new AbortController().signal
     expect(await svc.compactNow({
@@ -122,7 +131,7 @@ describe('CompactionEngine seam', () => {
   it('compaction/* events merge into SessionEventMap and are log-only', async () => {
     const ctx = new Context()
     const svc = new StubCompactionEngine(ctx)
-    const session = Session.create(SessionId('s'))
+    const session = Session.create(brandString<SessionId>('s'))
     const original = session.append('user/message', createUserMessage({
       content: [{ type: 'text', text: 'original' }],
       source: { kind: 'user' },
@@ -130,7 +139,7 @@ describe('CompactionEngine seam', () => {
 
     const result = await svc.compactRegion(original.seq, original.seq, stubAgent(session, 'm'))
 
-    const startEvent = session.events.find(e => e.type === 'compaction/start')
+    const startEvent = session.snapshotEvents().find(e => e.type === 'compaction/start')
     expect(startEvent).toBeDefined()
     // Log-only: the compiler rejects surfaceOp on compaction/* (not a SurfaceEventType);
     // verify the runtime value is absent.
@@ -141,20 +150,20 @@ describe('CompactionEngine seam', () => {
     expect(result.endSeq).toBeGreaterThan(result.summarySeq)
     expect(result.shadowedRange).toEqual({ start: original.seq, end: original.seq })
     expect(result.shadowedSeqs).toEqual([original.seq])
-    const checkpoint = session.events.find(event => event.type === 'user/message'
+    const checkpoint = session.snapshotEvents().find(event => event.type === 'user/message'
       && isCompactCheckpointSource(event.data.source))
     expect(checkpoint?.type === 'user/message' && checkpoint.data.source)
       .toEqual(compactCheckpointSource(result.compactionId))
-    expect(isCompactCheckpointSource({ kind: 'plugin', plugin: 'other' })).toBe(false)
+    expect(isCompactCheckpointSource({ kind: 'other' })).toBe(false)
     expect(isCompactCheckpointSource({ kind: 'user' })).toBe(false)
-    expect(session.events.filter(e => e.type.startsWith('compaction/')).map(e => e.type))
+    expect(session.snapshotEvents().filter(e => e.type.startsWith('compaction/')).map(e => e.type))
       .toEqual(['compaction/start', 'compaction/summary', 'compaction/end'])
   })
 
   it('threads the cancellation signal through to the backend', async () => {
     const ctx = new Context()
     const svc = new StubCompactionEngine(ctx)
-    const session = Session.create(SessionId('s'))
+    const session = Session.create(brandString<SessionId>('s'))
     const controller = new AbortController()
     const original = session.append('user/message', createUserMessage({
       content: [{ type: 'text', text: 'original' }],

@@ -9,6 +9,9 @@
   ],
   "references": [
     {
+      "path": "../../util/text-search"
+    },
+    {
       "path": "../../../vendor/cosmokit"
     },
     {
@@ -16,6 +19,9 @@
     },
     {
       "path": "../../../vendor/schemastery"
+    },
+    {
+      "path": "../../spill/spill"
     },
     {
       "path": "../../util/output-retention"
@@ -30,10 +36,10 @@
       "path": "../../core/agent"
     },
     {
-      "path": "../../compaction/compaction"
+      "path": "../../core/system-prompt"
     },
     {
-      "path": "../../runtime-diagnostics/invariants"
+      "path": "../../compaction/compaction"
     },
     {
       "path": "../../session-query/session-query"
@@ -46,6 +52,9 @@
     },
     {
       "path": "../../session/session-title"
+    },
+    {
+      "path": "../../subagent/subagent"
     }
   ]
 }

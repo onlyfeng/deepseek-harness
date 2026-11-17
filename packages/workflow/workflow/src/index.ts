@@ -70,7 +70,7 @@ declare module '@deepseek-ai/cordis' {
      * One `agent()` call settled (clean result, child failure, or run
      * cancellation). Paired with {@link Events['workflow/agent-start']} by
      * `agent.seq`, exactly once per started call on every stop path — on an
-     * engine termination path (a worker killed past its grace) the end is
+     * engine termination path the end is
      * engine-synthesized with outcome `'cancelled'`.
      * @param info - the run's identity snapshot.
      * @param agent - the call identity plus its outcome.
@@ -100,10 +100,13 @@ export type WorkflowEventName =
   | 'workflow/end'
 
 /**
- * Machine-routable fatal workflow failures: parse/meta/argument/schema errors,
- * resource caps, subagent infrastructure failures, unserializable boundary
- * values, and cancellation. An ordinary child failure resolves its item to
- * `null` and is not one of these fatal codes.
+ * Machine-routable workflow failures. Hooks throw the fatal codes:
+ * parse/meta/argument/schema errors, resource caps, subagent infrastructure
+ * failures, unserializable boundary values, and cancellation; an engine
+ * reports the one that ended a run as {@link WorkflowResult.errorCode}.
+ * `RUN_FAILED` classifies an `error` run without such a code: the script's own
+ * exception or an engine runtime failure. An ordinary child failure resolves
+ * its item to `null` and is not one of these codes.
  */
 export type WorkflowErrorCode =
   | 'SCRIPT_PARSE'
@@ -117,6 +120,7 @@ export type WorkflowErrorCode =
   | 'AGENT_RESULT'
   | 'RESULT_UNSERIALIZABLE'
   | 'CANCELLED'
+  | 'RUN_FAILED'
 
 /**
  * Typed error for workflow-seam failures. Extends {@link HarnessError}, so the
@@ -128,12 +132,14 @@ export type WorkflowErrorCode =
  * distinction is explicit at every catch site rather than implied.
  */
 export class WorkflowError extends HarnessError {
+  override readonly code: WorkflowErrorCode
   /** Whether combinators must propagate this error instead of nulling the item. */
   readonly fatal: boolean
 
   constructor(message: string, code: WorkflowErrorCode, options?: ErrorOptions & { fatal?: boolean }) {
     super(message, code, options)
     this.name = 'WorkflowError'
+    this.code = code
     this.fatal = options?.fatal ?? true
   }
 }
@@ -149,8 +155,8 @@ export function isFatalWorkflowError(error: unknown): boolean {
 
 /**
  * Workflow Service Definition contract. Invalid requests throw before publication; a live
- * run is holder-owned, its result never rejects, cancellation and disposal are
- * bounded, and disposal waits for child cleanup within that bound. Lifecycle
+ * run is holder-owned, its result never rejects, and disposal waits for script
+ * and child cleanup. Lifecycle
  * listener failures are contained, and `workflow/end` fires exactly once as the
  * result settles.
  */

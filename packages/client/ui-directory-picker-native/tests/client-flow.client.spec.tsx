@@ -4,18 +4,38 @@ import { describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import { afterEach } from 'vitest'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
+import { StaticRemoteAccess } from '@deepseek-ai/dsh-client-test-runtime'
 import type { DirectoryFlowOwnerProps } from '@deepseek-ai/dsh-client-ui-workspace/client'
 import { apply, inject } from '../src/client/index.ts'
 import { NativeDirectoryFlow } from '../src/client/flow.ts'
 import { apply as nodeApply } from '../src/index.ts'
 
-afterEach(cleanup)
+const desktopIpc = await vi.hoisted(async () => {
+  const { createRequire } = await import('node:module')
+  const path = await import('node:path')
+  // Electron belongs to the Desktop app; resolve its mock from that workspace.
+  const electron = createRequire(path.resolve(import.meta.dirname, '../../../../apps/desktop/package.json')).resolve('electron')
+  return { invoke: vi.fn(), on: vi.fn(), electron }
+})
+vi.mock(desktopIpc.electron, () => ({
+  ipcRenderer: { invoke: desktopIpc.invoke, on: desktopIpc.on },
+  contextBridge: { exposeInMainWorld: (name: string, value: unknown) => { vi.stubGlobal(name, value) } },
+}))
+vi.mock('../../../../apps/desktop/src/preload-platform.ts', () => ({ markDocumentPlatform: vi.fn(), syncWindowFullscreen: vi.fn() }))
+vi.mock('../../../../apps/desktop/src/preload-theme.ts', () => ({ syncNativeTheme: vi.fn() }))
+vi.mock('../../../../apps/desktop/src/preload-windows.ts', () => ({ syncWindowsAppearance: vi.fn() }))
+vi.mock('../../../../apps/desktop/src/preload-mandatory-overlay.ts', () => ({ installMandatoryUpdateOverlay: vi.fn() }))
 
-const HOLES = ['conversation.hero.workspace.directoryFlow', 'sidebar.workspaces.directoryFlow'] as const
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); desktopIpc.invoke.mockReset(); desktopIpc.on.mockReset() })
 
-async function bench() {
+const HOLES = [
+  'conversation.hero.workspace.directoryFlow', 'sidebar.workspaces.directoryFlow', 'workspace.picker.directoryFlow',
+] as const
+
+async function bench(allows: (action: string) => boolean = () => true) {
   const ctx = new Context()
   await ctx.plugin(SlotRegistry).await()
+  new StaticRemoteAccess(ctx, allows)
   const pickDirectory = vi.fn(async (): Promise<string | null> => '/tmp/picked')
   ctx.provide('uiWorkspace', { pickDirectory } as never)
   const slots = ctx.get('slots') as SlotRegistry
@@ -36,10 +56,22 @@ function owner(overrides: Partial<DirectoryFlowOwnerProps> = {}): DirectoryFlowO
 
 describe('directory-picker-native client half', () => {
   it('declares the services it drives', () => {
-    expect(inject).toEqual(['slots', 'uiWorkspace'])
+    expect(inject).toEqual(['slots', 'uiWorkspace', 'remoteAccess'])
   })
 
-  it('fills both directory-flow holes for declarations before or after apply, and leaves with its fiber', async () => {
+  it('fills no directory flow while the current Peer may not open the Host chooser', async () => {
+    const allows = vi.fn(() => false)
+    const b = await bench(allows)
+    b.declare()
+    const fiber = b.ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    expect(allows).toHaveBeenCalledWith('directoryPicker/pick')
+    for (const hole of HOLES) expect(b.slots.entries(hole)).toEqual([])
+    await fiber.dispose()
+    await b.ctx.fiber.dispose()
+  })
+
+  it('fills all three directory-flow holes for declarations before or after apply, and leaves with its fiber', async () => {
     const before = await bench()
     before.declare()
     const fiber = before.ctx.plugin({ inject: [...inject], apply })
@@ -75,15 +107,14 @@ describe('directory-picker-native client half', () => {
     process.on('uncaughtException', onUnhandled)
     try {
       // The rival subscribes first, so synchronous declaration notifications
-      // let it occupy the pair before this provider's waiting injection runs.
-      b.slots.inject(HOLES[0], () => b.slots.inject(HOLES[1], function* () {
-        yield b.slots.register({ name: HOLES[0] } as never, () => null)
-        yield b.slots.register({ name: HOLES[1] } as never, () => null)
-      }))
+      // let it occupy the set before this provider's waiting injection runs.
+      b.slots.inject(HOLES[0], () => b.slots.inject(HOLES[1], () => b.slots.inject(HOLES[2], function* () {
+        for (const hole of HOLES) yield b.slots.register({ name: hole } as never, () => null)
+      })))
       await b.ctx.plugin({ inject: [...inject], apply }).await()
       b.declare()
       await new Promise(resolve => setTimeout(resolve, 20))
-      // The rival keeps both holes; this provider rolled back wholesale and
+      // The rival keeps every hole; this provider rolled back wholesale and
       // surfaced the conflict on the fail-loud channel — no partial mix.
       for (const hole of HOLES) expect(b.slots.entries(hole)).toHaveLength(1)
       expect(rejections.map(String).join('\n')).toContain('already has a registration')
@@ -103,6 +134,27 @@ describe('directory-picker-native client half', () => {
     } finally {
       process.off('unhandledRejection', onUnhandled)
       process.off('uncaughtException', onUnhandled)
+    }
+  })
+
+  it('rolls back the earlier registrations when the Factory hole is already occupied', async () => {
+    const b = await bench()
+    b.declare()
+    // Foreign occupant in the LAST registered hole: the hero and sidebar
+    // registrations already landed when the third one throws.
+    b.slots.register({ name: HOLES[2] } as never, () => null)
+    const rejections: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { rejections.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const fiber = b.ctx.plugin({ inject: [...inject], apply })
+      await expect(fiber.await()).rejects.toThrow(/already has a registration/)
+      expect(b.slots.entries(HOLES[0])).toHaveLength(0)
+      expect(b.slots.entries(HOLES[1])).toHaveLength(0)
+      expect(b.slots.entries(HOLES[2])).toHaveLength(1)
+    } finally {
+      await new Promise(resolve => setTimeout(resolve, 0))
+      process.off('unhandledRejection', onUnhandled)
     }
   })
 
@@ -147,6 +199,51 @@ describe('directory-picker-native client half', () => {
     const injected = (entry.inject as () => { pick: () => Promise<string | null> })()
     await expect(injected.pick()).resolves.toBe('/tmp/picked')
     expect(b.pickDirectory).toHaveBeenCalledOnce()
+  })
+
+  it.each(['win32', 'darwin'] as const)('consumes the actual Desktop preload directory bridge on %s', async (platform) => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue(platform)
+    vi.resetModules()
+    vi.stubGlobal('location', new URL('dsh-app://app/'))
+    // Desktop's preload is typechecked by its own compiler program.
+    const preload = '../../../../apps/desktop/src/preload-app.ts'
+    await import(/* @vite-ignore */ preload)
+    desktopIpc.invoke.mockResolvedValue('/desktop/workspace')
+    const b = await bench()
+    const dispose = b.declare()
+    const fiber = b.ctx.plugin({ inject: [...inject], apply })
+    try {
+      await fiber.await()
+      const entry = b.slots.entries(HOLES[0])[0]!
+      const injected = (entry.inject as () => { pick: () => Promise<string | null> })()
+      await expect(injected.pick()).resolves.toBe('/desktop/workspace')
+      expect(desktopIpc.invoke).toHaveBeenCalledExactlyOnceWith('dsh-desktop:directory-pick')
+      expect(b.pickDirectory).not.toHaveBeenCalled()
+    } finally {
+      await fiber.dispose()
+      dispose()
+    }
+  })
+
+  it('uses the desktop bridge without calling the Host and preserves cancellation and errors', async () => {
+    const pick = vi.fn<() => Promise<string | null>>().mockResolvedValue('/desktop/workspace')
+    vi.stubGlobal('__DSH_DIRECTORY_PICKER__', { pick })
+    const b = await bench()
+    b.declare()
+    const fiber = b.ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    try {
+      const entry = b.slots.entries(HOLES[0])[0]!
+      const injected = (entry.inject as () => { pick: () => Promise<string | null> })()
+      await expect(injected.pick()).resolves.toBe('/desktop/workspace')
+      pick.mockResolvedValue(null)
+      await expect(injected.pick()).resolves.toBeNull()
+      pick.mockRejectedValue(new Error('desktop dialog failed'))
+      await expect(injected.pick()).rejects.toThrow('desktop dialog failed')
+      expect(b.pickDirectory).not.toHaveBeenCalled()
+    } finally {
+      await fiber.dispose()
+    }
   })
 
   it('runs one pick per open edge and reports the path to the latest onPicked', async () => {
@@ -228,8 +325,6 @@ describe('directory-picker-native client half', () => {
 })
 
 describe('directory-picker-native node half', () => {
-  // The invariant companion is mounted by the vitest-wide invariant host on
-  // every Context this suite creates; its registration is covered there.
   it('the node apply is an inert loader seat', () => {
     expect(() => { nodeApply() }).not.toThrow()
   })

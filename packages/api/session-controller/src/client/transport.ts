@@ -7,11 +7,14 @@ import {
   RemoteSnapshotStream,
   RemoteStreamCarrierError,
   type ClientRemote,
+  type RemoteStreamCarrierFailure,
   type RemoteJournalChange,
   type RemoteJournalFrame,
 } from '@deepseek-ai/dsh-api-gateway/client'
 import type {
   SessionAddress,
+  SessionAssistantStreamBaseline,
+  SessionAssistantStreamFrame,
   SessionControlFrame,
   SessionHistoryRecord,
   SessionPage,
@@ -25,6 +28,7 @@ import {
 } from './sessions/history-records.ts'
 import type { SessionEventLikeEntry, SessionLiveEventEntry } from './contract/events.ts'
 import type { SessionRemotes } from './sessions/remotes.ts'
+import { assertSessionWireEvent } from './session-wire-event.ts'
 
 export {
   SESSION_SEARCH_RESULT_LIMIT,
@@ -40,6 +44,7 @@ export type SessionRemote = ClientRemote['session']
 /** Opening metadata carried only by a follow snapshot, never by loadOlder pages. */
 interface SessionJournalPage extends SessionPage {
   readonly projections?: SessionProjectionBaseline
+  readonly assistantStream?: SessionAssistantStreamBaseline
 }
 
 /** One complete publication from the Session journal stream. */
@@ -51,27 +56,25 @@ export type SessionJournalChange =
     readonly hasMore: boolean
   }
   | { readonly type: 'append'; readonly entry: SessionLiveEventEntry }
+  | { readonly type: 'assistant-stream'; readonly frame: SessionAssistantStreamFrame }
 
 function toSessionJournalChange(
-  change: RemoteJournalChange<SessionJournalPage, SessionHistoryRecord>,
+  change: RemoteJournalChange<
+    SessionJournalPage, SessionHistoryRecord, SessionAssistantStreamFrame
+  >,
 ): SessionJournalChange {
   switch (change.type) {
     case 'replace':
     case 'prepend':
       return { ...change, entries: historyEntries(change.entries) }
     case 'append': {
-      if (change.entry.type !== 'event') {
-        throw new RemoteError(
-          'gateway/internal',
-          'session live stream emitted a packed history record',
-          {},
-        )
-      }
       return {
         type: 'append',
         entry: change.entry as unknown as SessionLiveEventEntry,
       }
     }
+    case 'notification':
+      return { type: 'assistant-stream', frame: change.notification }
   }
 }
 
@@ -89,7 +92,7 @@ export interface SessionControlStreamOptions {
   /** Apply a complete baseline or one later update. */
   readonly accept: (frame: SessionControlFrame) => void
   /** Observe a retryable carrier loss before reconnection. */
-  readonly carrierFailed?: (error: RemoteStreamCarrierError) => void
+  readonly carrierFailed?: (error: RemoteStreamCarrierFailure) => void
   /** Publish a terminal business or protocol failure. */
   readonly failed: (error: unknown) => void
 }
@@ -99,7 +102,7 @@ export interface SessionEventStreamOptions {
   /** Apply one complete event-window change. */
   readonly publish: (change: SessionJournalChange) => void
   /** Observe a retryable carrier loss before reconnection. */
-  readonly carrierFailed?: (error: RemoteStreamCarrierError) => void
+  readonly carrierFailed?: (error: RemoteStreamCarrierFailure) => void
   /** Publish a terminal stream, page, or protocol failure after opening. */
   readonly failed: (error: unknown) => void
 }
@@ -136,7 +139,8 @@ export class SessionEventStream extends RemoteJournalStream<
   SessionJournalPage,
   SessionHistoryRecord,
   number,
-  ClientSessionPageRequest
+  ClientSessionPageRequest,
+  SessionAssistantStreamFrame
 > {
   /**
    * @param remote - generated Session namespace and Gateway stream factory.
@@ -169,12 +173,26 @@ export class SessionEventStream extends RemoteJournalStream<
   protected override async * follow(
     request: ClientSessionPageRequest,
     signal: AbortSignal,
-  ): AsyncIterable<RemoteJournalFrame<SessionHistoryRecord, number, SessionJournalPage>> {
+  ): AsyncIterable<RemoteJournalFrame<
+    SessionHistoryRecord, number, SessionJournalPage, SessionAssistantStreamFrame
+  >> {
+    let assistantRevision: number | undefined
     for await (const frame of this.remote.session.follow({
       address: this.address,
-      ...(request.maxMessages === undefined ? {} : { maxMessages: request.maxMessages }),
+      activate: true,
+      assistantStream: true,
+      ...this.repairRequest(request),
     }, signal)) {
       if (frame.type === 'snapshot') {
+        for (const record of frame.records) assertSessionWireEvent(record.event)
+        if (frame.assistantStream === undefined) {
+          throw new RemoteError(
+            'gateway/internal',
+            'session assistant stream omitted its opted-in opening baseline',
+            {},
+          )
+        }
+        assistantRevision = frame.assistantStream.revision
         yield {
           type: 'opened',
           cursor: frame.cursor,
@@ -182,10 +200,23 @@ export class SessionEventStream extends RemoteJournalStream<
             records: frame.records,
             hasMore: frame.hasMore,
             projections: frame.projections,
+            assistantStream: frame.assistantStream,
           },
         }
         continue
       }
+      if (frame.type === 'assistant-stream') {
+        const expected = (assistantRevision ?? 0) + 1
+        if (frame.frame.revision !== expected) {
+          throw new RemoteStreamCarrierError(
+            `session assistant stream skipped revision ${String(expected)}`,
+          )
+        }
+        assistantRevision = frame.frame.revision
+        yield { type: 'notification', notification: frame.frame }
+        continue
+      }
+      assertSessionWireEvent(frame.event)
       yield { type: 'entry', entry: frame }
     }
   }
@@ -201,6 +232,7 @@ export class SessionEventStream extends RemoteJournalStream<
       signal,
     )
     if (!result.ok) throw result.error
+    for (const record of result.value.records) assertSessionWireEvent(record.event)
     return result.value
   }
 
@@ -208,6 +240,9 @@ export class SessionEventStream extends RemoteJournalStream<
   protected override repairRequest(
     request: ClientSessionPageRequest,
   ): ClientSessionPageRequest {
-    return request.maxMessages === undefined ? {} : { maxMessages: request.maxMessages }
+    return {
+      ...(request.maxMessages === undefined ? {} : { maxMessages: request.maxMessages }),
+      ...(request.turnWindow === undefined ? {} : { turnWindow: request.turnWindow }),
+    }
   }
 }

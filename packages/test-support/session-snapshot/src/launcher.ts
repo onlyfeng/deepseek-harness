@@ -13,7 +13,6 @@ import { createRequire } from 'node:module'
 import { basename, dirname, join, resolve } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { pathToFileURL } from 'node:url'
-import * as yaml from 'js-yaml'
 import {
   client as createAcpClientApp,
   methods,
@@ -37,7 +36,7 @@ import {
   type SetSessionConfigOptionResponse,
   type SessionNotification,
 } from '@agentclientprotocol/sdk'
-import { entryListSchema, type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
+import { parseEntryYaml, stringifyEntryYaml, type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import { resolveExampleLaunch } from '@deepseek-ai/dsh-loader-smoke'
 
 const EXIT_MARKER_GRACE_MS = 250
@@ -358,7 +357,7 @@ function profileArgs(
   const materializedRoot = join(cwd, '.dsh-profile-patches')
   mkdirSync(materializedRoot, { recursive: true })
   const materializedDir = mkdtempSync(join(materializedRoot, 'launch-'))
-  const materialized = patches.map((file, index) => materializeProfilePatch(file, cwd, materializedDir, index))
+  const materialized = patches.map((file, index) => materializeProfilePatch(file, cwd, profile, materializedDir, index))
   return ['--profile', profile, ...materialized.flatMap(file => ['--patch', file])]
 }
 
@@ -386,14 +385,14 @@ function packageDirFromPatch(source: string, packageName: string): string | unde
 
 /**
  * Install an authored patch's resolvable bare package into the temporary
- * profile fallback. This mirrors `dsh plugin` while retaining the bare entry
- * name and package provenance used by request metadata.
+ * profile. This mirrors `dsh plugin` while retaining the bare entry
+ * name and package identity used by request metadata.
  */
-function linkProfilePackage(source: string, cwd: string, packageName: string): void {
+function linkProfilePackage(source: string, cwd: string, profile: string, packageName: string): void {
   const packageDir = packageDirFromPatch(source, packageName)
   // The package may instead belong to the dsh installation; profile boot heals those links.
   if (packageDir === undefined) return
-  const link = join(cwd, '.dsh', 'profiles', 'node_modules', packageName)
+  const link = join(cwd, '.dsh', 'profiles', profile, 'node_modules', packageName)
   mkdirSync(dirname(link), { recursive: true })
   if (existsSync(link)) {
     if (realpathSync(link) !== packageDir) {
@@ -408,19 +407,22 @@ function linkProfilePackage(source: string, cwd: string, packageName: string): v
 /**
  * Copy one authored patch into the launch cwd with relative plugin names made absolute.
  * @param source - authored profile patch path.
- * @param cwd - isolated process cwd whose profile fallback receives package links.
+ * @param cwd - isolated process cwd whose profile receives package links.
+ * @param profile - profile whose local package lookup receives the test links.
  * @param targetDir - existing directory that owns the materialized patch.
  * @param index - stable patch ordinal used in the output filename.
  * @returns absolute materialized patch path.
  */
-export function materializeProfilePatch(source: string, cwd: string, targetDir: string, index: number): string {
-  const parsed = yaml.load(readFileSync(source, 'utf8'), { schema: entryListSchema })
+export function materializeProfilePatch(
+  source: string, cwd: string, profile: string, targetDir: string, index: number,
+): string {
+  const parsed = parseEntryYaml(readFileSync(source, 'utf8'))
   if (!Array.isArray(parsed)) throw new Error(`snapshot profile patch must be a top-level array: ${source}`)
   const patches = parsed as PatchOptions[]
   const baseDir = dirname(source)
   const resolveName = (value: string): string => {
     const packageName = barePackageName(value)
-    if (packageName !== undefined) linkProfilePackage(source, cwd, packageName)
+    if (packageName !== undefined) linkProfilePackage(source, cwd, profile, packageName)
     return value.startsWith('./') || value.startsWith('../')
       ? pathToFileURL(resolve(baseDir, value)).href
       : value
@@ -436,7 +438,7 @@ export function materializeProfilePatch(source: string, cwd: string, targetDir: 
     for (const entry of patch.insert ?? []) visitEntry(entry)
   }
   const target = join(targetDir, `${String(index)}-${basename(source)}`)
-  writeFileSync(target, yaml.dump(patches, { schema: entryListSchema, lineWidth: -1, noRefs: true }))
+  writeFileSync(target, stringifyEntryYaml(patches, { lineWidth: -1 }))
   return target
 }
 

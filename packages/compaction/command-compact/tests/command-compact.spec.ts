@@ -3,8 +3,9 @@ import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import CommandRuntime, { type CommandResult } from '@deepseek-ai/dsh-commands'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import type { CompactionId } from '@deepseek-ai/dsh-compaction/types'
 import {
-  CompactionId,
   CompactionEngine,
   ManualCompactionError,
   type CompactionAgentContext,
@@ -12,19 +13,19 @@ import {
   type CompactionTrigger,
   type ManualCompactAgentContext,
 } from '@deepseek-ai/dsh-compaction'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, type SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import * as commandCompact from '@deepseek-ai/dsh-command-compact'
 
-const COMPACTION_ID = CompactionId('command-compact-test')
+const COMPACTION_ID = brandString<CompactionId>('command-compact-test')
 
 const RESULT: CompactionResult = {
   compactionId: COMPACTION_ID,
-  startSeq: 1,
-  summarySeq: 2,
-  endSeq: 3,
+  startSeq: SessionSeq(1),
+  summarySeq: SessionSeq(2),
+  endSeq: SessionSeq(3),
   summary: [{ type: 'text', text: 'summary' }],
-  shadowedRange: { start: 1, end: 7 },
-  shadowedSeqs: [1, 3, 7],
+  shadowedRange: { start: SessionSeq(1), end: SessionSeq(7) },
+  shadowedSeqs: [SessionSeq(1), SessionSeq(3), SessionSeq(7)],
   shadowedTokenCount: 42,
 }
 
@@ -64,13 +65,13 @@ class StubCompactionEngine extends CompactionEngine {
     result: CompactionResult,
     sourceCommandId: Parameters<CompactionEngine['compactNow']>[2],
   ): CompactionResult {
-    const provenance = {
+    const operationIds = {
       compactionId: result.compactionId,
       ...sourceCommandId === undefined ? {} : { sourceCommandId },
     }
-    agent.session.append('compaction/start', { ...provenance, turn: null })
+    agent.session.append('compaction/start', { ...operationIds, turn: null })
     agent.session.append('compaction/summary', {
-      ...provenance,
+      ...operationIds,
       summary: result.summary,
       shadowedRange: result.shadowedRange,
       shadowedSeqs: result.shadowedSeqs,
@@ -78,8 +79,8 @@ class StubCompactionEngine extends CompactionEngine {
       provider: 'command-test',
       model: 'command-test',
     })
-    agent.session.append('compaction/end', { ...provenance, turn: null })
-    return { ...result, ...provenance }
+    agent.session.append('compaction/end', { ...operationIds, turn: null })
+    return { ...result, ...operationIds }
   }
 }
 
@@ -95,7 +96,7 @@ async function harness(): Promise<Harness> {
   await ctx.plugin(CommandRuntime)
   const compact = new StubCompactionEngine(ctx)
   const plugin = await ctx.plugin(commandCompact)
-  const session = Session.create(SessionId('command-compact'))
+  const session = Session.create(brandString<SessionId>('command-compact'))
   const agent = {
     session,
     status: 'idle',
@@ -121,7 +122,7 @@ function expectLastLifecycle(
   args: string,
   outcome: CommandResult,
 ): string {
-  const lifecycle = test.agent.session.events
+  const lifecycle = test.agent.session.snapshotEvents()
     .filter(event => event.type === 'command/run' || event.type === 'command/done')
     .slice(-2)
   const runEvent = lifecycle[0]
@@ -162,6 +163,7 @@ describe('@deepseek-ai/dsh-command-compact registration', () => {
     const loader = Object.create(Loader.prototype) as Loader
     expect(loader.unwrapExports(commandCompact)).toBe(commandCompact)
     expect(test.ctx.commands.list(test.agent)).toContainEqual({
+      definitionId: '@deepseek-ai/dsh-command-compact',
       name: 'compact',
       description: 'Compact older conversation history',
     })
@@ -207,8 +209,8 @@ describe('/compact human command', () => {
   it.each([
     ['busy', 'Compaction is unavailable because this process has an active compaction, or the agent is not idle.'],
     ['cancelled', 'Compaction cancelled.'],
-    ['changed', 'The history selected for compaction changed before it could be replaced. The conversation is unchanged; the attempt is recorded in the session log.'],
-    ['summary', 'Compaction could not produce a useful summary. The conversation is unchanged; the attempt is recorded in the session log.'],
+    ['changed', 'The history selected for compaction changed before it could be replaced. The attempt is recorded in the session log.'],
+    ['summary', 'Compaction could not produce a useful summary. The attempt is recorded in the session log.'],
     ['commit', 'Compaction did not finish cleanly; some session history may have changed. Inspect the current session state before retrying.'],
     ['persistence', 'Compaction finished, but the session could not be saved.'],
   ] as const)('maps expected %s failures to direct errors', async (code, text) => {

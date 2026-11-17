@@ -6,25 +6,25 @@ Status: implemented
 
 ## 问题
 
-[CI](../../../../.github/workflows/ci.yml) 将其静态、覆盖率、consumer 与原生 Windows 作业绑定到私有 runner 标签（`dsh-ubuntu-24-04-16core`、`dsh-windows-2025-16core`）。本 fork 无法分配这些池，那些作业会无限排队，`all checks passed` 也永远不会结束。要求该聚合结果的分支保护因此无法完成。
+[CI](../../../../.github/workflows/ci.yml) 将其静态、覆盖率与 consumer 作业绑定到私有 runner 标签 `dsh-ubuntu-24-04-16core`。[CI Windows](../../../../.github/workflows/ci-windows.yml) 把每个作业都绑到 `dsh-windows-2025-16core` / `dsh-win-ci`。本 fork 无法分配这些池，那些作业会无限排队，`all checks passed` / `windows checks passed` 也永远不会结束。要求这些聚合结果的分支保护因此无法完成。
 
-在 Actions 选项卡中禁用上游 `CI` 工作流可以解除死锁。同一文件里其余已在托管 runner 上运行的作业——Node 22.19 / 26 兼容性、Python SDK 套件、发布形态的 Linux x64 Python runtime 构建器，以及 Wine Windows 通道——随后也会停止运行，因为它们属于被禁用的工作流，而不在可移植文件中。
+在 Actions 选项卡中禁用上游 `CI` 与 `CI Windows` 工作流可以解除死锁。`ci.yml` 里其余已在托管 runner 上运行的作业——Node 24.9 / 26 兼容性与 Wine Windows 通道——随后也会停止运行，因为它们属于被禁用的工作流，而不在可移植文件中。[CI Python](../../../../.github/workflows/ci-python.yml) 的 Python SDK 套件和发布形态的 Python runtime 构建器完全运行在可托管的 runner 上（`ubuntu-latest`、托管的 `windows-2025`），保持启用。
 
-把 `ci.yml` 里这些私有 runner 作业改到 `ubuntu-latest` 可以恢复信号，但该文件在上游变动频繁，每次同步都会在 `runs-on` 表达式上冲突。
+把 `ci.yml` 或 `ci-windows.yml` 里这些私有 runner 作业改到托管 runner 可以恢复信号，但这两个文件在上游变动频繁，每次同步都会在 `runs-on` 表达式上冲突。
 
 ## 决策
 
-[`.github/workflows/fork-ci.yml`](../../../../.github/workflows/fork-ci.yml) 是 `onlyfeng/deepseek-harness` 上拉取请求与 `dev/compat` 推送的必需门禁。该文件在上游不存在，因此合并 `master` 不会与它冲突。操作者在本 fork 上禁用上游 `CI`、`CI master` 和 `Build PR preview` 工作流。`CI` 与 `CI master` 把作业绑到本 fork 无法分配的私有 runner 标签。[`Build PR preview`](../../../../.github/workflows/build-preview-cloudflare.yml) 使用同一 `dsh-ubuntu-24-04-16core` 标签，并且需要本 fork 未存储的 Cloudflare Pages / Access secret。这些工作流文件本身保持未修改。
+[`.github/workflows/fork-ci.yml`](../../../../.github/workflows/fork-ci.yml) 是 `onlyfeng/deepseek-harness` 上拉取请求与 `dev/compat` 推送的必需门禁。该文件在上游不存在，因此合并 `master` 不会与它冲突。操作者在本 fork 上禁用上游 `CI`、`CI Windows` 和 `CI master` 工作流；这三者都把作业绑到本 fork 无法分配的私有 runner 标签。[`CI Python`](../../../../.github/workflows/ci-python.yml) 与 [`Build PR preview`](../../../../.github/workflows/build-preview-cloudflare.yml) 在上游运行在可托管的 runner 上（`ubuntu-latest`，Linux 故障切换开关默认落到它），保持启用；`Build PR preview` 的必需构建步骤已经运行与本工作流 `artifacts` 作业相同的官方 `pnpm run build`，其 Cloudflare 上传步骤是 `continue-on-error`，因此缺失 Cloudflare secret 不会让该检查失败。这些工作流文件本身保持未修改。
 
 `fork checks passed` 依赖本工作流能在标准托管 runner 上运行的每一项作业：
 
 - `static` 在完整历史与 `DSH_ARCHIVE_BASE_REF`（拉取请求的 base SHA，或 `dev/compat` 推送上的 `github.event.before`）下运行 `pnpm run check:ci:static`，然后运行 `build:lib:host`，再运行 `typecheck:contracts-ready` 与 `lint:contracts-ready`。静态聚合拥有 runtime-closure、workspace 约束、package invariant、Cordis 配置、文档、catalog、module-graph 和 `knip`；typecheck 与 lint 留在本作业中，因为静态聚合并不拥有它们。Client tsc 会解析包 `remote` 子路径下生成的 Typert remote，因此 Host 契约构建必须先于它——与上游 consumer 通道的 `typertContractsGate()` 顺序相同。
 - `snapshots` 先用 `scripts/prepare-ci-bubblewrap.sh` 准备 bubblewrap，再用 `--with-deps` 安装 Playwright Chromium（库模式 `test:snapshot` 包含 `apps/web/tests/**/*.snapshot.ts`），再运行与 `snapshotGate()` 相同的官方 `pnpm run build` 加 `DSH_EXAMPLE_MODE=lib` `vitest.snapshot.config.ts` 图，并用 `DSH_SNAPSHOT_NAME_PATTERN`（`^(?!.*pwsh-tool-turn)`）上的 `--testNamePattern` 省略两项托管 pwsh headless 运行。该 snapshots 步骤通过 `pnpm exec vitest run` 调用该配置；`pnpm run test:snapshot -- --testNamePattern` 会再插入一个 `--`，vitest 会把这个 `--` 之后的内容当成文件过滤，名称模式因此不会生效。该名称模式放在环境变量里，避免 YAML `run` 字符串展开 `!`。Lib-mode Web 快照会请求 `workspace-write` 并拒绝在无隔离环境下运行；ACP 与 headless 会话在没有可用 sandbox 后端时会注入 `danger-full-access` 运行时上下文快照，而这与带 sandbox 录制的 fixture 不一致。托管 Ubuntu 镜像自带 `pwsh`，因此两项 `pwshOnly` 场景本会实际执行：持久 PTY 返回的是 shell 初始化回滚缓冲而不是命令输出，一次性 `pwsh-tool-turn` 会发出已提交 fixture 中没有的 `permission/preset` 钉住事件。已提交 fixture 不会被改写成这些托管结果。该作业设置 `DSH_SNAPSHOT_MAX_CONCURRENCY=1`，以免并行快照文件饿死 DeepSeek SSE keep-alive 注释测试。fixture 保护仍覆盖 `snapshots/session/persistent-pwsh-tool-turn/` 与 `snapshots/session/pwsh-tool-turn/`。本地 `pnpm run test:snapshot` 仍会执行这两个场景。跳过只写在 [`fork-ci.yml`](../../../../.github/workflows/fork-ci.yml)：`snapshot.yml` 拒绝未知字段，而改 `session-snapshot` 会在每次同步时冲突。
 - `artifacts` 运行 `pnpm run check:ci:artifacts`（官方 `pnpm run build`，随后 publint、built-package invariants、`verify-node-next-types` 和 built-bin smokes），然后运行 `pnpm run duplication` 以及带 `DSH_DOC_TYPECHECK_USE_BUILD_OUTPUT=1` 的 `doc-typecheck:contracts-ready`。在该官方构建之后，它用 `scripts/prepare-ci-bubblewrap.sh` 准备 bubblewrap，再用 `--with-deps` 安装 Playwright Chromium（与上游 consumer 作业的托管路径相同），并运行 `DSH_SNAPSHOT=replay TZ=Asia/Shanghai pnpm run test:web:ci`。托管 `ubuntu-latest` 是 UTC；已持久化的 Web 回放 golden 把 `clientTimeZone` 钉在 `Asia/Shanghai`，而 Chromium 的 `Intl.DateTimeFormat` 会跟随 `TZ`。`scripts/run-web-snapshots.ts` 在 `hmr-live.e2e.ts` 之前运行 `apps/web/tests/built-boot.expected.e2e.ts`，因为该摘要会哈希官方 `apps/web/dist` 与 `lib/client.js`，而 `dev:web` 会改写这些树。库模式 Web 快照会请求 `workspace-write` 并拒绝在无隔离环境下运行。托管 `ubuntu-latest` 有 4 个 CPU，因此 `DSH_WEB_SNAPSHOT_WORKERS` 为 `2`（上游在 16 核池上使用 `6`）。该作业不运行 `check:ci:consumers`：那个聚合还会重复 snapshots 与 node-compat。
-- `node-compat` 在 Node 22.19、Node 24 与 Node 26 上运行 `check:node-compat`。22.19 与 26 复现上游托管矩阵。Node 24 覆盖被禁用的 consumer 通道里 `ciConsumerGates()` 运行的 source-worker、Zstandard、source-launch 和 jsdom 冒烟；`check:ci:artifacts` 与 `check:ci:snapshot` 并不包含它们。
+- `node-compat` 在 Node 24.9 与 Node 26 上运行 `check:node-compat`，复现上游托管矩阵（受支持的下限与最新的 24.x/26）。
 - `python-sdk` 运行无密钥的 Python 3.10 SDK 套件。
 - `python-runtime` 以 `ci: true` 调用共享的[单文件可执行文件构建器](../../../../.github/workflows/build-exe-for-python-sdk.yml) 构建 `node24-linux-x64`，并映射 `secrets.DEEPSEEK_API_KEY_EXTERNAL`，与[必需的 Python runtime 作业](../../archived/testing/2026-08-12-required-python-runtime-pull-request-ci.md)一致。可复用工作流只有在调用方传入时才会收到具名 secret。拉取请求事件会跳过已安装 wheel 的 live-API preflight，因为本 GitHub fork 会设置 `head.repo.fork`；向 `dev/compat` 的推送会运行该 preflight，并在 secret 为空时失败。
-- `windows` 在 `ubuntu-latest` 上运行 `scripts/wine-windows-gates.sh`，与[可移植拉取请求 CI 记录](2026-07-23-portable-required-pull-request-ci.zh.md)中的阻塞式 Wine 通道一致。
+- `windows` 在 `ubuntu-latest` 上运行 `scripts/wine-windows-gates.sh`，与[可移植拉取请求 CI 记录](../../archived/process/2026-07-23-portable-required-pull-request-ci.md)中的阻塞式 Wine 通道一致。
 
 本工作流不运行 `check:ci:coverage` 或 `pnpm run test`。这些套件包含 `packages/terminal` 与 `packages/shell` 集成测试，它们依赖调校过的 PTY / PowerShell runner，并在 GitHub 托管镜像上失败；仓库的 Vitest `projects` 配置也无法在不编辑上游 Vitest 配置的情况下用 CLI 排除它们。`windows-native` 仍然省略，因为它仍需要本 fork 没有的私有 Windows runner。
 
@@ -32,9 +32,9 @@ Status: implemented
 
 ## 曾考虑的替代方案
 
-**把 `ci.yml` 的私有 runner 作业改到 `ubuntu-latest`。** 这会让上游工作流重新成为门禁，但 `ci.yml` 在上游变动频繁，每次同步都会在 `runs-on` 表达式上冲突。
+**把 `ci.yml` / `ci-windows.yml` 的私有 runner 作业改到托管 runner。** 这会让上游工作流重新成为门禁，但这两个文件在上游变动频繁，每次同步都会在 `runs-on` 表达式上冲突。
 
-**给 [`build-preview-cloudflare.yml`](../../../../.github/workflows/build-preview-cloudflare.yml) 加仓库 `if`，或把它改到 `ubuntu-latest`。** 两种改法都是上游文件覆盖层，每次同步都会冲突。本 fork 无法分配 `dsh-ubuntu-24-04-16core`，也未存储该作业需要的 Cloudflare Pages / Access secret，因此改到托管 runner 会以失败结束，而不会发布预览。在 Actions 选项卡中禁用该工作流，与 `CI` 和 `CI master` 一致。
+**连同 `CI` 与 `CI Windows` 一起禁用 `Build PR preview`。** 它的必需构建步骤已经运行在可托管的 Linux 故障切换开关上，不需要私有标签；禁用它只会丢掉 Cloudflare 预览和 snapshot-diff 页面，却不会避开任何排队的 runner。
 
 **在替代方案中只保留 build、typecheck 和 lint。** 这会让 Cordis 配置、package invariant、文档、catalog 和 module-graph 失败仍能合并，并把 typecheck 加 lint 当成与 `check:ci:static` 等价，而它们并不等价。
 
@@ -60,12 +60,10 @@ Status: implemented
 
 **把 `built-boot.expected.e2e.ts` 从 `test:web:ci` 的 serialFiles 里拿掉。** 该摘要会哈希官方 `apps/web/dist` 与 `lib/client.js`。`hmr-live` 会启动 `dev:web` 并改写这些树，因此摘要必须先运行。
 
-**只复现托管的 Node 22.19 / 26 矩阵。** 这与 `ci.yml` 的 `node-compat` 作业一致，但会丢掉被禁用的 consumer 通道在 Node 24 上运行的 `check:node-compat` 冒烟。source-worker、Zstandard、source-launch 或 jsdom 上仅 Node 24 的失败随后仍能满足 `fork checks passed`。
-
-**省略托管的 Python SDK 或 Python runtime 作业。** 这些作业在上游 CI 中已经运行在 `ubuntu-latest` 上。禁用该工作流却不复现它们，会从必需判定中丢掉两项 Python 分发检查。
+**依赖上游 `CI Python`，而不是本 fork 自己的 `python-sdk` / `python-runtime` 作业。** `ci-python.yml` 已经在可托管的 runner 上运行相同的套件，并在上游保持启用；在此重复它们是多余的，但能让 `fork checks passed` 作为单一必需聚合保持自洽，而不是拆成两个。
 
 **在托管 runner 上运行 `check:ci:coverage`，并用 Vitest CLI `--exclude` 隔离不稳定套件。** 本仓库使用 Vitest `projects`，因此 CLI `--exclude` 不会跨 project 生效。排除那些套件需要编辑上游 Vitest 配置，从而再次引入同步冲突。
 
 ## 后果
 
-本 fork 上的拉取请求与 `dev/compat` 推送等待 `fork checks passed`，而不是上游的 `all checks passed` 聚合。该替代方案覆盖每一项托管的上游作业，以及原先由私有 runner 拥有的静态、快照、产物与 Playwright Web 快照聚合。穷尽单元覆盖率、原生 Windows、两项托管 pwsh headless 场景以及 Cloudflare Pages 预览仍是本地或上游私有 runner 上的证据；仅限于那些套件的回归在此仍可能合并。需要 `dev/compat` 推送变绿的操作者必须存入非空的 `DEEPSEEK_API_KEY_EXTERNAL`；本 fork 上的拉取请求 `python-runtime` 已经跳过该 live-API preflight。禁用 `Build PR preview` 不会取消已经在为缺失 runner 排队的运行；在 Actions 界面取消该运行。
+本 fork 上的拉取请求与 `dev/compat` 推送等待 `fork checks passed`，而不是上游的 `all checks passed` / `windows checks passed` 聚合；`CI Python` 自己的 `python checks passed` 仍独立运行。该替代方案覆盖每一项可托管的上游作业，以及原先由私有 runner 拥有的静态、快照、产物与 Playwright Web 快照聚合。穷尽单元覆盖率、原生 Windows 以及两项托管 pwsh headless 场景仍是本地或上游私有 runner 上的证据；仅限于那些套件的回归在此仍可能合并。需要 `dev/compat` 推送变绿的操作者必须存入非空的 `DEEPSEEK_API_KEY_EXTERNAL`；本 fork 上的拉取请求 `python-runtime` 已经跳过该 live-API preflight。

@@ -8,8 +8,9 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import type { CompactionId } from '@deepseek-ai/dsh-compaction/types'
 import {
-  CompactionId,
   CompactionEngine,
   type CompactionAgentContext,
   type CompactionResult,
@@ -17,18 +18,18 @@ import {
   type ManualCompactAgentContext,
 } from '@deepseek-ai/dsh-compaction'
 import * as commandCompact from '@deepseek-ai/dsh-command-compact'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, type SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 
-const COMPACTION_ID = CompactionId('loader-command-compact-test')
+const COMPACTION_ID = brandString<CompactionId>('loader-command-compact-test')
 
 const RESULT: CompactionResult = {
   compactionId: COMPACTION_ID,
-  startSeq: 1,
-  summarySeq: 2,
-  endSeq: 3,
+  startSeq: SessionSeq(1),
+  summarySeq: SessionSeq(2),
+  endSeq: SessionSeq(3),
   summary: [{ type: 'text', text: 'loader summary' }],
-  shadowedRange: { start: 3, end: 8 },
-  shadowedSeqs: [3, 5, 8],
+  shadowedRange: { start: SessionSeq(3), end: SessionSeq(8) },
+  shadowedSeqs: [SessionSeq(3), SessionSeq(5), SessionSeq(8)],
   shadowedTokenCount: 99,
 }
 
@@ -50,13 +51,13 @@ class LoaderCompactionEngine extends CompactionEngine {
     _signal: AbortSignal,
     sourceCommandId?: Parameters<CompactionEngine['compactNow']>[2],
   ): Promise<CompactionResult | null> {
-    const provenance = {
+    const operationIds = {
       compactionId: RESULT.compactionId,
       ...sourceCommandId === undefined ? {} : { sourceCommandId },
     }
-    agent.session.append('compaction/start', { ...provenance, turn: null })
+    agent.session.append('compaction/start', { ...operationIds, turn: null })
     agent.session.append('compaction/summary', {
-      ...provenance,
+      ...operationIds,
       summary: RESULT.summary,
       shadowedRange: RESULT.shadowedRange,
       shadowedSeqs: RESULT.shadowedSeqs,
@@ -64,8 +65,8 @@ class LoaderCompactionEngine extends CompactionEngine {
       provider: 'loader-test',
       model: 'loader-test',
     })
-    agent.session.append('compaction/end', { ...provenance, turn: null })
-    return Promise.resolve({ ...RESULT, ...provenance })
+    agent.session.append('compaction/end', { ...operationIds, turn: null })
+    return Promise.resolve({ ...RESULT, ...operationIds })
   }
 }
 
@@ -112,7 +113,7 @@ describe('command-compact real Loader composition', () => {
     })
     await context.loader.await()
 
-    const session = Session.create(SessionId('loader-command-compact'))
+    const session = Session.create(brandString<SessionId>('loader-command-compact'))
     const agent = {
       session,
       status: 'idle',
@@ -120,6 +121,7 @@ describe('command-compact real Loader composition', () => {
       reserveTurnAdmission: () => () => undefined,
     } as unknown as Agent
     expect(context.commands.list(agent)).toContainEqual({
+      definitionId: '@deepseek-ai/dsh-command-compact',
       name: 'compact',
       description: 'Compact older conversation history',
     })
@@ -130,7 +132,7 @@ describe('command-compact real Loader composition', () => {
       text: 'Compacted 3 history items (~99 tokens).',
       sourceEventSeq: RESULT.summarySeq,
     })
-    expect(session.events.map(event => ({ type: event.type, data: event.data }))).toEqual([
+    expect(session.snapshotEvents().map(event => ({ type: event.type, data: event.data }))).toEqual([
       {
         type: 'command/run',
         data: {

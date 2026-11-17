@@ -7,7 +7,7 @@
  * without depending on dsh-llm; see that package's README for the
  * nominal-typing policy.
  *
- * @module @deepseek-ai/dsh-llm/brand
+ * @module @deepseek-ai/dsh-llm/src/brand.ts
  */
 
 import { brandString, type Branded } from '@deepseek-ai/dsh-brand'
@@ -49,6 +49,18 @@ export type ProviderRequestId = Branded<'ProviderRequestId'>
  */
 export function ProviderRequestId(id: string): ProviderRequestId {
   return brandString<ProviderRequestId>(id)
+}
+
+/** Identity of one model streaming attempt, unique within one Agent lifecycle. */
+export type LlmAttemptId = Branded<'LlmAttemptId'>
+
+/**
+ * Brand one loop-owned streaming attempt identifier.
+ * @param id - the opaque Agent-lifecycle-local identifier.
+ * @returns the same string with the attempt-id brand.
+ */
+export function LlmAttemptId(id: string): LlmAttemptId {
+  return brandString<LlmAttemptId>(id)
 }
 
 /** Adapter-owned identifier for one model's selectable reasoning effort. */

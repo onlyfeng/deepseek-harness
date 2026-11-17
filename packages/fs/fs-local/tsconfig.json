@@ -7,6 +7,12 @@
   "include": ["src"],
   "references": [
     {
+      "path": "../../util/brand"
+    },
+    {
+      "path": "../fs-patch"
+    },
+    {
       "path": "../../../vendor/cosmokit"
     },
     {
@@ -20,9 +26,6 @@
     },
     {
       "path": "../fs"
-    },
-    {
-      "path": "../../runtime-diagnostics/invariants"
     }
   ]
 }

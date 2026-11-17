@@ -27,6 +27,9 @@
       "path": "../../core/agent"
     },
     {
+      "path": "../../api/gateway/tsconfig.host.json"
+    },
+    {
       "path": "../../core/scope"
     },
     {
@@ -39,7 +42,7 @@
       "path": "../../llm/llm"
     },
     {
-      "path": "../../runtime-diagnostics/invariants"
+      "path": "../../util/error"
     },
     {
       "path": "../../typert/protocol"
